@@ -17,37 +17,60 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
-	"github.com/Azure/azure-amqp-common-go/v4/auth"
-	eventhub "github.com/Azure/azure-event-hubs-go/v3"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	eventhub "github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
 	eventv1 "github.com/fluxcd/pkg/apis/event/v1beta1"
+	"github.com/fluxcd/pkg/auth/azure"
+	"github.com/fluxcd/pkg/cache"
 )
 
 // AzureEventHub holds the eventhub client
 type AzureEventHub struct {
-	Hub *eventhub.Hub
+	ProducerClient *eventhub.ProducerClient
 }
 
 // NewAzureEventHub creates a eventhub client
-func NewAzureEventHub(endpointURL, token, eventHubNamespace string) (*AzureEventHub, error) {
-	var hub *eventhub.Hub
+func NewAzureEventHub(ctx context.Context, endpointURL, token, eventHubNamespace, proxy,
+	serviceAccountName, providerName, providerNamespace string, tokenClient client.Client,
+	tokenCache *cache.TokenCache) (*AzureEventHub, error) {
+	var client *eventhub.ProducerClient
 	var err error
 
-	// token should only be defined if JWT is used
-	if token != "" {
-		hub, err = newJWTHub(endpointURL, token, eventHubNamespace)
+	if err := validateAuthOptions(endpointURL, token, serviceAccountName); err != nil {
+		return nil, fmt.Errorf("invalid authentication options: %v", err)
+	}
+
+	if isSASAuth(endpointURL) {
+		client, err = newSASHub(endpointURL)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create a eventhub using JWT %v", err)
+			return nil, fmt.Errorf("failed to create a eventhub using SAS: %w", err)
 		}
 	} else {
-		hub, err = newSASHub(endpointURL)
+		// if token doesn't exist, try to create a new token using managed identity
+		if token == "" {
+			token, err = newManagedIdentityToken(ctx, proxy, serviceAccountName, providerName,
+				providerNamespace, azure.ScopeEventHubs, tokenClient, tokenCache)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create a eventhub using managed identity: %w", err)
+			}
+		} else {
+			log.FromContext(ctx).Error(nil, "warning: static JWT authentication is deprecated and will be removed in the future, prefer workload identity: https://fluxcd.io/flux/components/notification/providers/#managed-identity")
+		}
+		client, err = newJWTHub(endpointURL, token, eventHubNamespace)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create a eventhub using SAS %v", err)
+			return nil, fmt.Errorf("failed to create a eventhub using authentication token: %w", err)
 		}
 	}
 
 	return &AzureEventHub{
-		Hub: hub,
+		ProducerClient: client,
 	}, nil
 }
 
@@ -60,17 +83,27 @@ func (e *AzureEventHub) Post(ctx context.Context, event eventv1.Event) error {
 
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("Unable to marshall event: %w", err)
+		return fmt.Errorf("unable to marshall event: %w", err)
 	}
 
-	err = e.Hub.Send(ctx, eventhub.NewEvent(eventBytes))
+	eventBatch, err := e.ProducerClient.NewEventDataBatch(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("Failed to send msg: %w", err)
+		return fmt.Errorf("failed to create event data batch: %w", err)
 	}
 
-	err = e.Hub.Close(ctx)
+	err = eventBatch.AddEventData(&eventhub.EventData{Body: eventBytes}, nil)
 	if err != nil {
-		return fmt.Errorf("Unable to close connection: %w", err)
+		return fmt.Errorf("failed to add event data to batch: %w", err)
+	}
+
+	err = e.ProducerClient.SendEventDataBatch(ctx, eventBatch, nil)
+	if err != nil {
+		return fmt.Errorf("failed to send msg: %w", err)
+	}
+
+	err = e.ProducerClient.Close(ctx)
+	if err != nil {
+		return fmt.Errorf("unable to close connection: %w", err)
 	}
 	return nil
 }
@@ -81,26 +114,24 @@ type PureJWT struct {
 }
 
 // NewJWTProvider create a pureJWT method
-func NewJWTProvider(jwt string) *PureJWT {
+func NewJWTProvider(jwt string) azcore.TokenCredential {
 	return &PureJWT{
 		jwt: jwt,
 	}
 }
 
 // GetToken uses a JWT token, we assume that we will get new tokens when needed, thus no Expiry defined
-func (j *PureJWT) GetToken(uri string) (*auth.Token, error) {
-	return &auth.Token{
-		TokenType: auth.CBSTokenTypeJWT,
-		Token:     j.jwt,
-		Expiry:    "",
+func (j *PureJWT) GetToken(ctx context.Context, options policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	return azcore.AccessToken{
+		Token: j.jwt,
 	}, nil
 }
 
 // newJWTHub used when address is a JWT token
-func newJWTHub(eventhubName, token, eventHubNamespace string) (*eventhub.Hub, error) {
+func newJWTHub(eventhubName, token, eventHubNamespace string) (*eventhub.ProducerClient, error) {
 	provider := NewJWTProvider(token)
-
-	hub, err := eventhub.NewHub(eventHubNamespace, eventhubName, provider)
+	fullyQualifiedNamespace := ensureFullyQualifiedNamespace(eventHubNamespace)
+	hub, err := eventhub.NewProducerClient(fullyQualifiedNamespace, eventhubName, provider, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -108,11 +139,66 @@ func newJWTHub(eventhubName, token, eventHubNamespace string) (*eventhub.Hub, er
 }
 
 // newSASHub used when address is a SAS ConnectionString
-func newSASHub(address string) (*eventhub.Hub, error) {
-	hub, err := eventhub.NewHubFromConnectionString(address)
+func newSASHub(address string) (*eventhub.ProducerClient, error) {
+	client, err := eventhub.NewProducerClientFromConnectionString(address, "", nil)
 	if err != nil {
 		return nil, err
 	}
 
-	return hub, nil
+	return client, nil
+}
+
+// validateAuthOptions checks if the authentication options are valid
+func validateAuthOptions(endpointURL, token, serviceAccountName string) error {
+	if endpointURL == "" {
+		return fmt.Errorf("endpoint URL cannot be empty")
+	}
+
+	if isSASAuth(endpointURL) {
+		if err := validateSASAuth(token, serviceAccountName); err != nil {
+			return err
+		}
+	} else if serviceAccountName != "" && token != "" {
+		return fmt.Errorf("serviceAccountName and jwt token authentication cannot be set at the same time")
+	}
+
+	return nil
+}
+
+// isSASAuth checks if the endpoint URL contains SAS authentication parameters
+func isSASAuth(endpointURL string) bool {
+	return strings.Contains(endpointURL, "SharedAccessKey")
+}
+
+// validateSASAuth checks if SAS authentication is used correctly
+func validateSASAuth(token, serviceAccountName string) error {
+	if serviceAccountName != "" {
+		return fmt.Errorf("serviceAccountName and SAS authentication cannot be set at the same time")
+	}
+	if token != "" {
+		return fmt.Errorf("jwt token and SAS authentication cannot be set at the same time")
+	}
+
+	return nil
+}
+
+// getEventHubSuffixFromAuthorityHost maps AZURE_AUTHORITY_HOST to the correct suffix
+func getEventHubSuffixFromAuthorityHost() string {
+	authorityHost := os.Getenv("AZURE_AUTHORITY_HOST")
+	switch {
+	case strings.Contains(authorityHost, "chinacloudapi.cn"):
+		return ".servicebus.chinacloudapi.cn"
+	case strings.Contains(authorityHost, "microsoftonline.us"):
+		return ".servicebus.usgovcloudapi.net"
+	default:
+		return ".servicebus.windows.net"
+	}
+}
+
+// ensureFullyQualifiedNamespace appends suffix if not already present
+func ensureFullyQualifiedNamespace(namespace string) string {
+	if strings.Contains(namespace, ".servicebus.") {
+		return namespace // already fully qualified
+	}
+	return namespace + getEventHubSuffixFromAuthorityHost()
 }

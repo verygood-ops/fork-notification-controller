@@ -18,36 +18,77 @@ package notifier
 
 import (
 	"context"
-	"crypto/x509"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/url"
-	"strings"
+	"time"
+
+	"github.com/hashicorp/go-retryablehttp"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	eventv1 "github.com/fluxcd/pkg/apis/event/v1beta1"
 )
 
 type Alertmanager struct {
-	URL      string
-	ProxyURL string
-	CertPool *x509.CertPool
+	URL       string
+	ProxyURL  string
+	TLSConfig *tls.Config
+	Token     string
+	Username  string
+	Password  string
 }
 
 type AlertManagerAlert struct {
 	Status      string            `json:"status"`
 	Labels      map[string]string `json:"labels"`
 	Annotations map[string]string `json:"annotations"`
+
+	StartsAt AlertManagerTime `json:"startsAt"`
+	EndsAt   AlertManagerTime `json:"endsAt,omitempty"`
 }
 
-func NewAlertmanager(hookURL string, proxyURL string, certPool *x509.CertPool) (*Alertmanager, error) {
+// AlertManagerTime takes care of representing time.Time as RFC3339.
+// See https://prometheus.io/docs/alerting/0.27/clients/
+type AlertManagerTime time.Time
+
+func (a AlertManagerTime) String() string {
+	return time.Time(a).Format(time.RFC3339)
+}
+
+func (a AlertManagerTime) MarshalJSON() ([]byte, error) {
+	return json.Marshal(a.String())
+}
+
+func (a *AlertManagerTime) UnmarshalJSON(jsonRepr []byte) error {
+	var serializedTime string
+	if err := json.Unmarshal(jsonRepr, &serializedTime); err != nil {
+		return err
+	}
+
+	t, err := time.Parse(time.RFC3339, serializedTime)
+	if err != nil {
+		return err
+	}
+
+	*a = AlertManagerTime(t)
+	return nil
+}
+
+func NewAlertmanager(hookURL string, proxyURL string, tlsConfig *tls.Config, token, user, pass string) (*Alertmanager, error) {
 	_, err := url.ParseRequestURI(hookURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Alertmanager URL %s: '%w'", hookURL, err)
 	}
 
 	return &Alertmanager{
-		URL:      hookURL,
-		ProxyURL: proxyURL,
-		CertPool: certPool,
+		URL:       hookURL,
+		ProxyURL:  proxyURL,
+		Token:     token,
+		Username:  user,
+		Password:  pass,
+		TLSConfig: tlsConfig,
 	}, nil
 }
 
@@ -70,28 +111,57 @@ func (s *Alertmanager) Post(ctx context.Context, event eventv1.Event) error {
 	if event.Metadata != nil {
 		labels = event.Metadata
 	}
-	labels["alertname"] = "Flux" + event.InvolvedObject.Kind + strings.Title(event.Reason)
+	labels["alertname"] = "Flux" + event.InvolvedObject.Kind + cases.Title(language.Und).String(event.Reason)
 	labels["severity"] = event.Severity
 	labels["reason"] = event.Reason
-	labels["timestamp"] = event.Timestamp.String()
 
 	labels["kind"] = event.InvolvedObject.Kind
 	labels["name"] = event.InvolvedObject.Name
 	labels["namespace"] = event.InvolvedObject.Namespace
 	labels["reportingcontroller"] = event.ReportingController
 
+	// The best reasonable `endsAt` value would be multiplying
+	// InvolvedObject's reconciliation interval by 2 then adding that to
+	// `startsAt` (the next successful reconciliation would make sure
+	// the alert is cleared after the timeout). Due to
+	// event.InvolvedObject only containing the object reference (namely
+	// the GVKNN) best we can do is leave it unset up to Alertmanager's
+	// default `resolve_timeout`.
+	//
+	// https://prometheus.io/docs/alerting/0.27/configuration/#file-layout-and-global-settings
+	startsAt := AlertManagerTime(event.Timestamp.Time)
+
 	payload := []AlertManagerAlert{
 		{
 			Labels:      labels,
 			Annotations: annotations,
 			Status:      "firing",
+
+			StartsAt: startsAt,
 		},
 	}
 
-	err := postMessage(ctx, s.URL, s.ProxyURL, s.CertPool, payload)
+	var opts []postOption
+	if s.ProxyURL != "" {
+		opts = append(opts, withProxy(s.ProxyURL))
+	}
+	if s.TLSConfig != nil {
+		opts = append(opts, withTLSConfig(s.TLSConfig))
+	}
+	if s.Token != "" {
+		opts = append(opts, withRequestModifier(func(request *retryablehttp.Request) {
+			request.Header.Add("Authorization", "Bearer "+s.Token)
+		}))
+	}
+	if s.Username != "" && s.Password != "" {
+		opts = append(opts, withRequestModifier(func(request *retryablehttp.Request) {
+			request.SetBasicAuth(s.Username, s.Password)
+		}))
+	}
 
-	if err != nil {
+	if err := postMessage(ctx, s.URL, payload, opts...); err != nil {
 		return fmt.Errorf("postMessage failed: %w", err)
 	}
+
 	return nil
 }

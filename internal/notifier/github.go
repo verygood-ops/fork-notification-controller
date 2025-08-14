@@ -19,73 +19,43 @@ package notifier
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
-	"strings"
 
-	"github.com/google/go-github/v41/github"
-	"golang.org/x/oauth2"
+	"github.com/google/go-github/v64/github"
 
 	eventv1 "github.com/fluxcd/pkg/apis/event/v1beta1"
 	"github.com/fluxcd/pkg/apis/meta"
+	"github.com/fluxcd/pkg/cache"
 )
 
 type GitHub struct {
-	Owner       string
-	Repo        string
-	ProviderUID string
-	Client      *github.Client
+	Owner        string
+	Repo         string
+	CommitStatus string
+	Client       *github.Client
 }
 
-func NewGitHub(providerUID string, addr string, token string, certPool *x509.CertPool) (*GitHub, error) {
-	if len(token) == 0 {
-		return nil, errors.New("github token cannot be empty")
+func NewGitHub(commitStatus string, addr string, token string, tlsConfig *tls.Config,
+	proxyURL string, providerName string, providerNamespace string, secretData map[string][]byte,
+	tokenCache *cache.TokenCache) (*GitHub, error) {
+
+	// this should never happen
+	if commitStatus == "" {
+		return nil, errors.New("commit status cannot be empty")
 	}
 
-	host, id, err := parseGitAddress(addr)
+	repoInfo, err := getRepoInfoAndGithubClient(addr, token, tlsConfig,
+		proxyURL, providerName, providerNamespace, secretData, tokenCache)
 	if err != nil {
 		return nil, err
-	}
-
-	baseUrl, err := url.Parse(host)
-	if err != nil {
-		return nil, err
-	}
-
-	comp := strings.Split(id, "/")
-	if len(comp) != 2 {
-		return nil, fmt.Errorf("invalid repository id %q", id)
-	}
-
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(context.Background(), ts)
-	client := github.NewClient(tc)
-	if baseUrl.Host != "github.com" {
-		if certPool != nil {
-			tr := &http.Transport{
-				TLSClientConfig: &tls.Config{
-					RootCAs: certPool,
-				},
-			}
-			hc := &http.Client{Transport: tr}
-			ctx := context.WithValue(context.Background(), oauth2.HTTPClient, hc)
-			tc = oauth2.NewClient(ctx, ts)
-		}
-
-		client, err = github.NewEnterpriseClient(host, host, tc)
-		if err != nil {
-			return nil, fmt.Errorf("could not create enterprise GitHub client: %v", err)
-		}
 	}
 
 	return &GitHub{
-		Owner:       comp[0],
-		Repo:        comp[1],
-		ProviderUID: providerUID,
-		Client:      client,
+		Owner:        repoInfo.owner,
+		Repo:         repoInfo.repo,
+		CommitStatus: commitStatus,
+		Client:       repoInfo.client,
 	}, nil
 }
 
@@ -96,7 +66,7 @@ func (g *GitHub) Post(ctx context.Context, event eventv1.Event) error {
 		return nil
 	}
 
-	revString, ok := event.Metadata[eventv1.MetaRevisionKey]
+	revString, ok := event.GetRevision()
 	if !ok {
 		return errors.New("missing revision metadata")
 	}
@@ -110,7 +80,7 @@ func (g *GitHub) Post(ctx context.Context, event eventv1.Event) error {
 	}
 
 	_, desc := formatNameAndDescription(event)
-	id := generateCommitStatusID(g.ProviderUID, event)
+	id := g.CommitStatus
 	status := &github.RepoStatus{
 		State:       &state,
 		Context:     &id,

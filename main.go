@@ -29,21 +29,31 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-	crtlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/config"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/fluxcd/pkg/apis/meta"
+	"github.com/fluxcd/pkg/auth"
+	pkgcache "github.com/fluxcd/pkg/cache"
 	"github.com/fluxcd/pkg/runtime/acl"
 	"github.com/fluxcd/pkg/runtime/client"
-	helper "github.com/fluxcd/pkg/runtime/controller"
+	runtimeCtrl "github.com/fluxcd/pkg/runtime/controller"
 	feathelper "github.com/fluxcd/pkg/runtime/features"
 	"github.com/fluxcd/pkg/runtime/leaderelection"
 	"github.com/fluxcd/pkg/runtime/logger"
+	"github.com/fluxcd/pkg/runtime/metrics"
 	"github.com/fluxcd/pkg/runtime/pprof"
 	"github.com/fluxcd/pkg/runtime/probes"
 
-	apiv1 "github.com/fluxcd/notification-controller/api/v1beta2"
-	"github.com/fluxcd/notification-controller/controllers"
+	apiv1 "github.com/fluxcd/notification-controller/api/v1"
+	apiv1b2 "github.com/fluxcd/notification-controller/api/v1beta2"
+	apiv1b3 "github.com/fluxcd/notification-controller/api/v1beta3"
+	"github.com/fluxcd/notification-controller/internal/controller"
 	"github.com/fluxcd/notification-controller/internal/features"
 	"github.com/fluxcd/notification-controller/internal/server"
 	// +kubebuilder:scaffold:imports
@@ -60,24 +70,32 @@ func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 
 	_ = apiv1.AddToScheme(scheme)
+	_ = apiv1b2.AddToScheme(scheme)
+	_ = apiv1b3.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
 }
 
 func main() {
+	const (
+		tokenCacheDefaultMaxSize = 100
+	)
+
 	var (
 		eventsAddr            string
 		receiverAddr          string
 		healthAddr            string
 		metricsAddr           string
 		concurrent            int
-		watchAllNamespaces    bool
 		rateLimitInterval     time.Duration
 		clientOptions         client.Options
 		logOptions            logger.Options
 		leaderElectionOptions leaderelection.Options
 		aclOptions            acl.Options
-		rateLimiterOptions    helper.RateLimiterOptions
+		rateLimiterOptions    runtimeCtrl.RateLimiterOptions
 		featureGates          feathelper.FeatureGates
+		exportHTTPPathMetrics bool
+		tokenCacheOptions     pkgcache.TokenFlags
+		watchOptions          runtimeCtrl.WatchOptions
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
@@ -85,9 +103,13 @@ func main() {
 	flag.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
 	flag.StringVar(&receiverAddr, "receiverAddr", ":9292", "The address the webhook receiver endpoint binds to.")
 	flag.IntVar(&concurrent, "concurrent", 4, "The number of concurrent notification reconciles.")
-	flag.BoolVar(&watchAllNamespaces, "watch-all-namespaces", true,
-		"Watch for custom resources in all namespaces, if set to false it will only watch the runtime namespace.")
 	flag.DurationVar(&rateLimitInterval, "rate-limit-interval", 5*time.Minute, "Interval in which rate limit has effect.")
+	flag.BoolVar(&exportHTTPPathMetrics, "export-http-path-metrics", false, "When enabled, the requests full path is included in the HTTP server metrics (risk as high cardinality")
+	// After implementing --watch-label-selector the following two bindings can be replaced by watchOptions.BindFlags().
+	flag.BoolVar(&watchOptions.AllNamespaces, "watch-all-namespaces", true,
+		"Watch for custom resources in all namespaces, if set to false it will only watch the runtime namespace.")
+	flag.CommandLine.StringVar(&watchOptions.ConfigsLabelSelector, "watch-configs-label-selector", meta.LabelKeyWatch+"="+meta.LabelValueWatchEnabled,
+		"Watch for ConfigMaps and Secrets with matching labels.")
 
 	clientOptions.BindFlags(flag.CommandLine)
 	logOptions.BindFlags(flag.CommandLine)
@@ -95,19 +117,27 @@ func main() {
 	aclOptions.BindFlags(flag.CommandLine)
 	rateLimiterOptions.BindFlags(flag.CommandLine)
 	featureGates.BindFlags(flag.CommandLine)
+	tokenCacheOptions.BindFlags(flag.CommandLine, tokenCacheDefaultMaxSize)
 
 	flag.Parse()
+
+	logger.SetLogger(logger.NewLogger(logOptions))
 
 	if err := featureGates.WithLogger(setupLog).SupportedFeatures(features.FeatureGates()); err != nil {
 		setupLog.Error(err, "unable to load feature gates")
 		os.Exit(1)
 	}
 
-	log := logger.NewLogger(logOptions)
-	ctrl.SetLogger(log)
+	switch enabled, err := features.Enabled(auth.FeatureGateObjectLevelWorkloadIdentity); {
+	case err != nil:
+		setupLog.Error(err, "unable to check feature gate "+auth.FeatureGateObjectLevelWorkloadIdentity)
+		os.Exit(1)
+	case enabled:
+		auth.EnableObjectLevelWorkloadIdentity()
+	}
 
 	watchNamespace := ""
-	if !watchAllNamespaces {
+	if !watchOptions.AllNamespaces {
 		watchNamespace = os.Getenv("RUNTIME_NAMESPACE")
 	}
 
@@ -122,63 +152,94 @@ func main() {
 	}
 
 	restConfig := client.GetConfigOrDie(clientOptions)
-	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
+	mgrConfig := ctrl.Options{
 		Scheme:                        scheme,
-		MetricsBindAddress:            metricsAddr,
 		HealthProbeBindAddress:        healthAddr,
-		Port:                          9443,
 		LeaderElection:                leaderElectionOptions.Enable,
 		LeaderElectionReleaseOnCancel: leaderElectionOptions.ReleaseOnCancel,
 		LeaseDuration:                 &leaderElectionOptions.LeaseDuration,
 		RenewDeadline:                 &leaderElectionOptions.RenewDeadline,
 		RetryPeriod:                   &leaderElectionOptions.RetryPeriod,
 		LeaderElectionID:              fmt.Sprintf("%s-leader-election", controllerName),
-		Namespace:                     watchNamespace,
 		Logger:                        ctrl.Log,
-		ClientDisableCacheFor:         disableCacheFor,
-	})
+		Controller: config.Controller{
+			RecoverPanic:            ptr.To(true),
+			MaxConcurrentReconciles: concurrent,
+		},
+		Client: ctrlclient.Options{
+			Cache: &ctrlclient.CacheOptions{
+				DisableFor: disableCacheFor,
+			},
+		},
+		Metrics: metricsserver.Options{
+			BindAddress:   metricsAddr,
+			ExtraHandlers: pprof.GetHandlers(),
+		},
+	}
+
+	if watchNamespace != "" {
+		mgrConfig.Cache = ctrlcache.Options{
+			DefaultNamespaces: map[string]ctrlcache.Config{
+				watchNamespace: {},
+			},
+		}
+	}
+
+	mgr, err := ctrl.NewManager(restConfig, mgrConfig)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
 
 	probes.SetupChecks(mgr, setupLog)
-	pprof.SetupHandlers(mgr, setupLog)
 
-	metricsH := helper.MustMakeMetrics(mgr)
+	metricsH := runtimeCtrl.NewMetrics(mgr, metrics.MustMakeRecorder(), apiv1.NotificationFinalizer)
 
-	if err = (&controllers.ProviderReconciler{
-		Client:         mgr.GetClient(),
-		ControllerName: controllerName,
-		Metrics:        metricsH,
-		EventRecorder:  mgr.GetEventRecorderFor(controllerName),
-	}).SetupWithManagerAndOptions(mgr, controllers.ProviderReconcilerOptions{
-		MaxConcurrentReconciles: concurrent,
-		RateLimiter:             helper.GetRateLimiter(rateLimiterOptions),
-	}); err != nil {
+	var tokenCache *pkgcache.TokenCache
+	if tokenCacheOptions.MaxSize > 0 {
+		var err error
+		tokenCache, err = pkgcache.NewTokenCache(tokenCacheOptions.MaxSize,
+			pkgcache.WithMaxDuration(tokenCacheOptions.MaxDuration),
+			pkgcache.WithMetricsRegisterer(ctrlmetrics.Registry),
+			pkgcache.WithMetricsPrefix("gotk_token_"))
+		if err != nil {
+			setupLog.Error(err, "unable to create token cache")
+			os.Exit(1)
+		}
+	}
+
+	watchConfigsPredicate, err := runtimeCtrl.GetWatchConfigsPredicate(watchOptions)
+	if err != nil {
+		setupLog.Error(err, "unable to configure watch configs label selector for controller")
+		os.Exit(1)
+	}
+
+	if err = (&controller.ProviderReconciler{
+		Client:        mgr.GetClient(),
+		EventRecorder: mgr.GetEventRecorderFor(controllerName),
+		TokenCache:    tokenCache,
+	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Provider")
 		os.Exit(1)
 	}
-	if err = (&controllers.AlertReconciler{
+
+	if err = (&controller.AlertReconciler{
 		Client:         mgr.GetClient(),
 		ControllerName: controllerName,
-		Metrics:        metricsH,
 		EventRecorder:  mgr.GetEventRecorderFor(controllerName),
-	}).SetupWithManagerAndOptions(mgr, controllers.AlertReconcilerOptions{
-		MaxConcurrentReconciles: concurrent,
-		RateLimiter:             helper.GetRateLimiter(rateLimiterOptions),
-	}); err != nil {
+	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Alert")
 		os.Exit(1)
 	}
-	if err = (&controllers.ReceiverReconciler{
+
+	if err = (&controller.ReceiverReconciler{
 		Client:         mgr.GetClient(),
 		ControllerName: controllerName,
 		Metrics:        metricsH,
 		EventRecorder:  mgr.GetEventRecorderFor(controllerName),
-	}).SetupWithManagerAndOptions(mgr, controllers.ReceiverReconcilerOptions{
-		MaxConcurrentReconciles: concurrent,
-		RateLimiter:             helper.GetRateLimiter(rateLimiterOptions),
+	}).SetupWithManagerAndOptions(mgr, controller.ReceiverReconcilerOptions{
+		RateLimiter:           runtimeCtrl.GetRateLimiter(rateLimiterOptions),
+		WatchConfigsPredicate: watchConfigsPredicate,
 	}); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Receiver")
 		os.Exit(1)
@@ -189,23 +250,27 @@ func main() {
 	store, err := memorystore.New(&memorystore.Config{
 		Interval: rateLimitInterval,
 	})
+	if err != nil {
+		setupLog.Error(err, "unable to create middleware store")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting event server", "addr", eventsAddr)
 	eventMdlw := middleware.New(middleware.Config{
 		Recorder: prommetrics.NewRecorder(prommetrics.Config{
 			Prefix:   "gotk_event",
-			Registry: crtlmetrics.Registry,
+			Registry: ctrlmetrics.Registry,
 		}),
 	})
-	eventServer := server.NewEventServer(eventsAddr, log, mgr.GetClient(), aclOptions.NoCrossNamespaceRefs)
+	eventServer := server.NewEventServer(eventsAddr, ctrl.Log, mgr.GetClient(), mgr.GetEventRecorderFor(controllerName), aclOptions.NoCrossNamespaceRefs, exportHTTPPathMetrics, tokenCache)
 	go eventServer.ListenAndServe(ctx.Done(), eventMdlw, store)
 
 	setupLog.Info("starting webhook receiver server", "addr", receiverAddr)
-	receiverServer := server.NewReceiverServer(receiverAddr, log, mgr.GetClient())
+	receiverServer := server.NewReceiverServer(receiverAddr, ctrl.Log, mgr.GetClient(), aclOptions.NoCrossNamespaceRefs, exportHTTPPathMetrics)
 	receiverMdlw := middleware.New(middleware.Config{
 		Recorder: prommetrics.NewRecorder(prommetrics.Config{
 			Prefix:   "gotk_receiver",
-			Registry: crtlmetrics.Registry,
+			Registry: ctrlmetrics.Registry,
 		}),
 	})
 	go receiverServer.ListenAndServe(ctx.Done(), receiverMdlw)

@@ -18,7 +18,8 @@ package notifier
 
 import (
 	"context"
-	"crypto/x509"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -29,12 +30,12 @@ import (
 
 // Slack holds the hook URL
 type Slack struct {
-	URL      string
-	ProxyURL string
-	Token    string
-	Username string
-	Channel  string
-	CertPool *x509.CertPool
+	URL       string
+	ProxyURL  string
+	Token     string
+	Username  string
+	Channel   string
+	TLSConfig *tls.Config
 }
 
 // SlackPayload holds the channel and attachments
@@ -63,19 +64,19 @@ type SlackField struct {
 }
 
 // NewSlack validates the Slack URL and returns a Slack object
-func NewSlack(hookURL string, proxyURL string, token string, certPool *x509.CertPool, username string, channel string) (*Slack, error) {
+func NewSlack(hookURL string, proxyURL string, token string, tlsConfig *tls.Config, username string, channel string) (*Slack, error) {
 	_, err := url.ParseRequestURI(hookURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Slack hook URL %s: '%w'", hookURL, err)
 	}
 
 	return &Slack{
-		Channel:  channel,
-		Username: username,
-		URL:      hookURL,
-		ProxyURL: proxyURL,
-		Token:    token,
-		CertPool: certPool,
+		Channel:   channel,
+		Username:  username,
+		URL:       hookURL,
+		ProxyURL:  proxyURL,
+		Token:     token,
+		TLSConfig: tlsConfig,
 	}, nil
 }
 
@@ -118,13 +119,49 @@ func (s *Slack) Post(ctx context.Context, event eventv1.Event) error {
 
 	payload.Attachments = []SlackAttachment{a}
 
-	err := postMessage(ctx, s.URL, s.ProxyURL, s.CertPool, payload, func(request *retryablehttp.Request) {
-		if s.Token != "" {
-			request.Header.Add("Authorization", "Bearer "+s.Token)
-		}
-	})
-	if err != nil {
+	opts := []postOption{
+		withRequestModifier(func(request *retryablehttp.Request) {
+			if s.Token != "" {
+				request.Header.Add("Authorization", "Bearer "+s.Token)
+			}
+		}),
+	}
+	if s.ProxyURL != "" {
+		opts = append(opts, withProxy(s.ProxyURL))
+	}
+	if s.TLSConfig != nil {
+		opts = append(opts, withTLSConfig(s.TLSConfig))
+	}
+	if s.URL == "https://slack.com/api/chat.postMessage" {
+		opts = append(opts, withResponseValidator(validateSlackResponse))
+	}
+
+	if err := postMessage(ctx, s.URL, payload, opts...); err != nil {
 		return fmt.Errorf("postMessage failed: %w", err)
 	}
+
 	return nil
+}
+
+// validateSlackResponse validates that a chat.postMessage API response is successful.
+// chat.postMessage API always returns 200 OK.
+// See https://api.slack.com/methods/chat.postMessage.
+//
+// On the other hand, incoming webhooks return more expressive HTTP status codes.
+// See https://api.slack.com/messaging/webhooks#handling_errors.
+func validateSlackResponse(_ int, body []byte) error {
+	type slackResponse struct {
+		Ok    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+
+	slackResp := slackResponse{}
+	if err := json.Unmarshal(body, &slackResp); err != nil {
+		return fmt.Errorf("unable to unmarshal response body: %w", err)
+	}
+
+	if slackResp.Ok {
+		return nil
+	}
+	return fmt.Errorf("Slack responded with error: %s", slackResp.Error)
 }

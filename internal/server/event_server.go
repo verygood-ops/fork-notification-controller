@@ -33,26 +33,43 @@ import (
 	"github.com/sethvargo/go-limiter/httplimit"
 	"github.com/slok/go-http-metrics/middleware"
 	"github.com/slok/go-http-metrics/middleware/std"
+	kuberecorder "k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	eventv1 "github.com/fluxcd/pkg/apis/event/v1beta1"
+	"github.com/fluxcd/pkg/cache"
 )
+
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=notification.toolkit.fluxcd.io,resources=alerts,verbs=get;list
+// +kubebuilder:rbac:groups=notification.toolkit.fluxcd.io,resources=providers,verbs=get
+
+type eventContextKey struct{}
 
 // EventServer handles event POST requests
 type EventServer struct {
-	port                 string
-	logger               logr.Logger
-	kubeClient           client.Client
-	noCrossNamespaceRefs bool
+	port                  string
+	logger                logr.Logger
+	kubeClient            client.Client
+	noCrossNamespaceRefs  bool
+	exportHTTPPathMetrics bool
+	tokenCache            *cache.TokenCache
+	kuberecorder.EventRecorder
 }
 
 // NewEventServer returns an HTTP server that handles events
-func NewEventServer(port string, logger logr.Logger, kubeClient client.Client, noCrossNamespaceRefs bool) *EventServer {
+func NewEventServer(port string, logger logr.Logger, kubeClient client.Client,
+	eventRecorder kuberecorder.EventRecorder, noCrossNamespaceRefs bool,
+	exportHTTPPathMetrics bool, tokenCache *cache.TokenCache) *EventServer {
 	return &EventServer{
-		port:                 port,
-		logger:               logger.WithName("event-server"),
-		kubeClient:           kubeClient,
-		noCrossNamespaceRefs: noCrossNamespaceRefs,
+		port:                  port,
+		logger:                logger.WithName("event-server"),
+		kubeClient:            kubeClient,
+		EventRecorder:         eventRecorder,
+		noCrossNamespaceRefs:  noCrossNamespaceRefs,
+		exportHTTPPathMetrics: exportHTTPPathMetrics,
+		tokenCache:            tokenCache,
 	}
 }
 
@@ -63,9 +80,22 @@ func (s *EventServer) ListenAndServe(stopCh <-chan struct{}, mdlw middleware.Mid
 		s.logger.Error(err, "Event server crashed")
 		os.Exit(1)
 	}
+	var handler http.Handler = http.HandlerFunc(s.handleEvent())
+	for _, middleware := range []func(http.Handler) http.Handler{
+		limitMiddleware.Handle,
+		logRateLimitMiddleware,
+		s.eventMiddleware,
+	} {
+		handler = middleware(handler)
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/", s.logRateLimitMiddleware(limitMiddleware.Handle(http.HandlerFunc(s.handleEvent()))))
-	h := std.Handler("", mdlw, mux)
+	path := "/"
+	mux.Handle(path, handler)
+	handlerID := path
+	if s.exportHTTPPathMetrics {
+		handlerID = ""
+	}
+	h := std.Handler(handlerID, mdlw, mux)
 	srv := &http.Server{
 		Addr:    s.port,
 		Handler: h,
@@ -90,6 +120,79 @@ func (s *EventServer) ListenAndServe(stopCh <-chan struct{}, mdlw middleware.Mid
 	}
 }
 
+// eventMiddleware cleans up the event metadata using cleanupMetadata() and
+// adds the cleaned event in the request context which can then be queried and
+// used directly by the other http handlers. This middleware also adds a
+// logger with the event's involved object's reference information to the
+// request context.
+func (s *EventServer) eventMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			s.logger.Error(err, "reading the request body failed")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := r.Body.Close(); err != nil {
+			s.logger.Error(err, "closing the request body failed")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+		event := &eventv1.Event{}
+		err = json.Unmarshal(body, event)
+		if err != nil {
+			s.logger.Error(err, "decoding the request body failed")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		cleanupMetadata(event)
+
+		eventLogger := s.logger.WithValues("eventInvolvedObject", event.InvolvedObject)
+
+		enhancedCtx := context.WithValue(r.Context(), eventContextKey{}, event)
+		enhancedCtx = log.IntoContext(enhancedCtx, eventLogger)
+		enhancedReq := r.WithContext(enhancedCtx)
+
+		h.ServeHTTP(w, enhancedReq)
+	})
+}
+
+// cleanupMetadata removes metadata entries which are not used for alerting.
+// In particular, it removes the checksum and digest metadata entries and
+// keeps only the metadata entries that are prefixed with either the event
+// group prefix or the involved object's group prefix.
+func cleanupMetadata(event *eventv1.Event) {
+	const eventGroupPrefix = eventv1.Group + "/"
+	objectGroupPrefix := event.InvolvedObject.GetObjectKind().GroupVersionKind().Group + "/"
+	excludeList := []string{
+		fmt.Sprintf("%s%s", objectGroupPrefix, eventv1.MetaChecksumKey),
+		fmt.Sprintf("%s%s", objectGroupPrefix, eventv1.MetaDigestKey),
+	}
+
+	// Filter other meta based on group prefix, while filtering out excludes
+	meta := make(map[string]string)
+	for key, val := range event.Metadata {
+		if !inList(excludeList, key) &&
+			(strings.HasPrefix(key, eventGroupPrefix) || strings.HasPrefix(key, objectGroupPrefix)) {
+			meta[key] = val
+		}
+	}
+
+	event.Metadata = meta
+}
+
+func inList(l []string, i string) bool {
+	for _, v := range l {
+		if strings.EqualFold(v, i) {
+			return true
+		}
+	}
+	return false
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
 	Status int
@@ -100,7 +203,7 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-func (s *EventServer) logRateLimitMiddleware(h http.Handler) http.Handler {
+func logRateLimitMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recorder := &statusRecorder{
 			ResponseWriter: w,
@@ -109,51 +212,51 @@ func (s *EventServer) logRateLimitMiddleware(h http.Handler) http.Handler {
 		h.ServeHTTP(recorder, r)
 
 		if recorder.Status == http.StatusTooManyRequests {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				s.logger.Error(err, "reading the request body failed")
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			event := &eventv1.Event{}
-			err = json.Unmarshal(body, event)
-			if err != nil {
-				s.logger.Error(err, "decoding the request body failed")
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			r.Body = io.NopCloser(bytes.NewBuffer(body))
-
-			s.logger.V(1).Info("Discarding event, rate limiting duplicate events",
-				"reconciler kind", event.InvolvedObject.Kind,
-				"name", event.InvolvedObject.Name,
-				"namespace", event.InvolvedObject.Namespace)
+			log.FromContext(r.Context()).V(1).
+				Info("Discarding event, rate limiting duplicate events")
 		}
 	})
 }
 
+// eventKeyFunc generates a unique key for an event based on the provided HTTP
+// request, which can be used to deduplicate events. The key is calculated by
+// concatenating specific event attributes and hashing them using SHA-256.
+// The key is then returned as a hex-encoded string.
+//
+// The event attributes are prefixed with an identifier to avoid collisions
+// between different event attributes.
 func eventKeyFunc(r *http.Request) (string, error) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return "", err
+	event := r.Context().Value(eventContextKey{}).(*eventv1.Event)
+
+	comps := []string{
+		"event",
+		"name=" + event.InvolvedObject.Name,
+		"namespace=" + event.InvolvedObject.Namespace,
+		"kind=" + event.InvolvedObject.Kind,
+		"message=" + event.Message,
 	}
 
-	event := &eventv1.Event{}
-	err = json.Unmarshal(body, event)
-	if err != nil {
-		return "", err
-	}
+	objectGroup := event.InvolvedObject.GetObjectKind().GroupVersionKind().Group
 
-	r.Body = io.NopCloser(bytes.NewBuffer(body))
-
-	comps := []string{"event", event.InvolvedObject.Name, event.InvolvedObject.Namespace, event.InvolvedObject.Kind, event.Message}
-	revString, ok := event.Metadata[eventv1.MetaRevisionKey]
+	originRevisionKey := fmt.Sprintf("%s/%s", objectGroup, eventv1.MetaOriginRevisionKey)
+	originRevision, ok := event.Metadata[originRevisionKey]
 	if ok {
-		comps = append(comps, revString)
+		comps = append(comps, "originRevision="+originRevision)
 	}
-	val := strings.Join(comps, "/")
-	digest := sha256.Sum256([]byte(val))
+
+	revisionKey := fmt.Sprintf("%s/%s", objectGroup, eventv1.MetaRevisionKey)
+	revision, ok := event.Metadata[revisionKey]
+	if ok {
+		comps = append(comps, "revision="+revision)
+	}
+
+	tokenKey := fmt.Sprintf("%s/%s", objectGroup, eventv1.MetaTokenKey)
+	token, ok := event.Metadata[tokenKey]
+	if ok {
+		comps = append(comps, "token="+token)
+	}
+
+	key := strings.Join(comps, "/")
+	digest := sha256.Sum256([]byte(key))
 	return fmt.Sprintf("%x", digest), nil
 }

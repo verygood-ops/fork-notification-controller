@@ -19,18 +19,13 @@ package notifier
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
-	"strings"
 
 	eventv1 "github.com/fluxcd/pkg/apis/event/v1beta1"
+	"github.com/fluxcd/pkg/cache"
 
-	"github.com/google/go-github/v41/github"
-	"golang.org/x/oauth2"
+	"github.com/google/go-github/v64/github"
 )
 
 type GitHubDispatch struct {
@@ -39,51 +34,20 @@ type GitHubDispatch struct {
 	Client *github.Client
 }
 
-func NewGitHubDispatch(addr string, token string, certPool *x509.CertPool) (*GitHubDispatch, error) {
-	if len(token) == 0 {
-		return nil, errors.New("github token cannot be empty")
-	}
+func NewGitHubDispatch(addr string, token string, tlsConfig *tls.Config, proxyURL string,
+	providerName string, providerNamespace string, secretData map[string][]byte,
+	tokenCache *cache.TokenCache) (*GitHubDispatch, error) {
 
-	host, id, err := parseGitAddress(addr)
+	repoInfo, err := getRepoInfoAndGithubClient(addr, token, tlsConfig,
+		proxyURL, providerName, providerNamespace, secretData, tokenCache)
 	if err != nil {
 		return nil, err
-	}
-
-	baseUrl, err := url.Parse(host)
-	if err != nil {
-		return nil, err
-	}
-
-	comp := strings.Split(id, "/")
-	if len(comp) != 2 {
-		return nil, fmt.Errorf("invalid repository id %q", id)
-	}
-
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(context.Background(), ts)
-	client := github.NewClient(tc)
-	if baseUrl.Host != "github.com" {
-		if certPool != nil {
-			tr := &http.Transport{
-				TLSClientConfig: &tls.Config{
-					RootCAs: certPool,
-				},
-			}
-			hc := &http.Client{Transport: tr}
-			ctx := context.WithValue(context.Background(), oauth2.HTTPClient, hc)
-			tc = oauth2.NewClient(ctx, ts)
-		}
-
-		client, err = github.NewEnterpriseClient(host, host, tc)
-		if err != nil {
-			return nil, fmt.Errorf("could not create enterprise GitHub client: %v", err)
-		}
 	}
 
 	return &GitHubDispatch{
-		Owner:  comp[0],
-		Repo:   comp[1],
-		Client: client,
+		Owner:  repoInfo.owner,
+		Repo:   repoInfo.repo,
+		Client: repoInfo.client,
 	}, nil
 }
 
@@ -99,7 +63,7 @@ func (g *GitHubDispatch) Post(ctx context.Context, event eventv1.Event) error {
 
 	eventData, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("Failed to marshal object into json: %w", err)
+		return fmt.Errorf("failed to marshal object into json: %w", err)
 	}
 	eventDataRaw := json.RawMessage(eventData)
 
@@ -110,7 +74,7 @@ func (g *GitHubDispatch) Post(ctx context.Context, event eventv1.Event) error {
 	_, _, err = g.Client.Repositories.Dispatch(ctx, g.Owner, g.Repo, opts)
 
 	if err != nil {
-		return fmt.Errorf("Could not send github repository dispatch webhook: %v", err)
+		return fmt.Errorf("could not send github repository dispatch webhook: %v", err)
 	}
 
 	return nil

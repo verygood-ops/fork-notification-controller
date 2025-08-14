@@ -17,104 +17,341 @@ limitations under the License.
 package notifier
 
 import (
+	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 
-	apiv1 "github.com/fluxcd/notification-controller/api/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/fluxcd/pkg/cache"
+
+	apiv1 "github.com/fluxcd/notification-controller/api/v1beta3"
 )
 
-type Factory struct {
-	URL         string
-	ProxyURL    string
-	Username    string
-	Channel     string
-	Token       string
-	Headers     map[string]string
-	CertPool    *x509.CertPool
-	Password    string
-	ProviderUID string
+var (
+	// notifiers is a map of notifier names to factory functions.
+	notifiers = notifierMap{
+		// GenericProvider is the default notifier
+		apiv1.GenericProvider:         genericNotifierFunc,
+		apiv1.GenericHMACProvider:     genericHMACNotifierFunc,
+		apiv1.SlackProvider:           slackNotifierFunc,
+		apiv1.DiscordProvider:         discordNotifierFunc,
+		apiv1.RocketProvider:          rocketNotifierFunc,
+		apiv1.MSTeamsProvider:         msteamsNotifierFunc,
+		apiv1.GoogleChatProvider:      googleChatNotifierFunc,
+		apiv1.GooglePubSubProvider:    googlePubSubNotifierFunc,
+		apiv1.WebexProvider:           webexNotifierFunc,
+		apiv1.SentryProvider:          sentryNotifierFunc,
+		apiv1.AzureEventHubProvider:   azureEventHubNotifierFunc,
+		apiv1.TelegramProvider:        telegramNotifierFunc,
+		apiv1.LarkProvider:            larkNotifierFunc,
+		apiv1.Matrix:                  matrixNotifierFunc,
+		apiv1.OpsgenieProvider:        opsgenieNotifierFunc,
+		apiv1.AlertManagerProvider:    alertmanagerNotifierFunc,
+		apiv1.GrafanaProvider:         grafanaNotifierFunc,
+		apiv1.PagerDutyProvider:       pagerDutyNotifierFunc,
+		apiv1.DataDogProvider:         dataDogNotifierFunc,
+		apiv1.NATSProvider:            natsNotifierFunc,
+		apiv1.GitHubProvider:          gitHubNotifierFunc,
+		apiv1.GitHubDispatchProvider:  gitHubDispatchNotifierFunc,
+		apiv1.GitLabProvider:          gitLabNotifierFunc,
+		apiv1.GiteaProvider:           giteaNotifierFunc,
+		apiv1.BitbucketServerProvider: bitbucketServerNotifierFunc,
+		apiv1.BitbucketProvider:       bitbucketNotifierFunc,
+		apiv1.AzureDevOpsProvider:     azureDevOpsNotifierFunc,
+	}
+)
+
+// notifierMap is a map of provider names to notifier factory functions
+type notifierMap map[string]factoryFunc
+
+// factoryFunc is a factory function that creates a new notifier
+type factoryFunc func(opts notifierOptions) (Interface, error)
+
+type notifierOptions struct {
+	Context  context.Context
+	URL      string
+	ProxyURL string
+	Username string
+	Channel  string
+	Token    string
+	Headers  map[string]string
+	// CertPool is kept for Git platform providers (GitHub, GitLab, etc.) that use third-party SDKs.
+	// TODO: Remove this field once all notifiers support client certificate authentication via TLSConfig.
+	CertPool           *x509.CertPool
+	TLSConfig          *tls.Config
+	Password           string
+	CommitStatus       string
+	ProviderName       string
+	ProviderNamespace  string
+	SecretData         map[string][]byte
+	ServiceAccountName string
+	TokenCache         *cache.TokenCache
+	TokenClient        client.Client
 }
 
-func NewFactory(url string,
-	proxy string,
-	username string,
-	channel string,
-	token string,
-	headers map[string]string,
-	certPool *x509.CertPool,
-	password string,
-	providerUID string) *Factory {
+type Factory struct {
+	notifierOptions
+}
+
+// Option represents a functional option for configuring a notifier.
+type Option func(*notifierOptions)
+
+// WithProxyURL sets the proxy URL for the notifier.
+func WithProxyURL(url string) Option {
+	return func(o *notifierOptions) {
+		o.ProxyURL = url
+	}
+}
+
+// WithUsername sets the username for the notifier.
+func WithUsername(username string) Option {
+	return func(o *notifierOptions) {
+		o.Username = username
+	}
+}
+
+// WithChannel sets the channel for the notifier.
+func WithChannel(channel string) Option {
+	return func(o *notifierOptions) {
+		o.Channel = channel
+	}
+}
+
+// WithToken sets the token for the notifier.
+func WithToken(token string) Option {
+	return func(o *notifierOptions) {
+		o.Token = token
+	}
+}
+
+// WithHeaders sets the headers for the notifier.
+func WithHeaders(headers map[string]string) Option {
+	return func(o *notifierOptions) {
+		o.Headers = headers
+	}
+}
+
+// WithCertPool sets the certificate pool for the notifier.
+func WithCertPool(certPool *x509.CertPool) Option {
+	return func(o *notifierOptions) {
+		o.CertPool = certPool
+	}
+}
+
+// WithTLSConfig sets the TLS configuration for the notifier.
+func WithTLSConfig(tlsConfig *tls.Config) Option {
+	return func(o *notifierOptions) {
+		o.TLSConfig = tlsConfig
+	}
+}
+
+// WithPassword sets the password for the notifier.
+func WithPassword(password string) Option {
+	return func(o *notifierOptions) {
+		o.Password = password
+	}
+}
+
+// WithCommitStatus sets the custom commit status for the notifier.
+func WithCommitStatus(commitStatus string) Option {
+	return func(o *notifierOptions) {
+		o.CommitStatus = commitStatus
+	}
+}
+
+// WithProviderName sets the provider name for the notifier.
+func WithProviderName(name string) Option {
+	return func(o *notifierOptions) {
+		o.ProviderName = name
+	}
+}
+
+// WithProviderNamespace sets the provider namespace for the notifier.
+func WithProviderNamespace(namespace string) Option {
+	return func(o *notifierOptions) {
+		o.ProviderNamespace = namespace
+	}
+}
+
+// WithSecretData sets the secret data for the notifier.
+func WithSecretData(data map[string][]byte) Option {
+	return func(o *notifierOptions) {
+		o.SecretData = data
+	}
+}
+
+// WithTokenCache sets the token cache for the notifier.
+func WithTokenCache(cache *cache.TokenCache) Option {
+	return func(o *notifierOptions) {
+		o.TokenCache = cache
+	}
+}
+
+// WithTokenClient sets the token client for the notifier.
+func WithTokenClient(kubeClient client.Client) Option {
+	return func(o *notifierOptions) {
+		o.TokenClient = kubeClient
+	}
+}
+
+// WithServiceAccount sets the service account for the notifier.
+func WithServiceAccount(serviceAccountName string) Option {
+	return func(o *notifierOptions) {
+		o.ServiceAccountName = serviceAccountName
+	}
+}
+
+// WithURL sets the webhook URL for the notifier.
+func WithURL(url string) Option {
+	return func(o *notifierOptions) {
+		o.URL = url
+	}
+}
+
+// NewFactory creates a new notifier factory with optional configurations.
+func NewFactory(ctx context.Context, opts ...Option) *Factory {
+	options := notifierOptions{
+		Context: ctx,
+	}
+
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	return &Factory{
-		URL:         url,
-		ProxyURL:    proxy,
-		Channel:     channel,
-		Username:    username,
-		Token:       token,
-		Headers:     headers,
-		CertPool:    certPool,
-		Password:    password,
-		ProviderUID: providerUID,
+		notifierOptions: options,
 	}
 }
 
 func (f Factory) Notifier(provider string) (Interface, error) {
-	if f.URL == "" {
-		return &NopNotifier{}, nil
+	notifier, ok := notifiers[provider]
+	if !ok {
+		return nil, fmt.Errorf("provider %s not supported", provider)
 	}
 
-	var n Interface
-	var err error
-	switch provider {
-	case apiv1.GenericProvider:
-		n, err = NewForwarder(f.URL, f.ProxyURL, f.Headers, f.CertPool, nil)
-	case apiv1.GenericHMACProvider:
-		n, err = NewForwarder(f.URL, f.ProxyURL, f.Headers, f.CertPool, []byte(f.Token))
-	case apiv1.SlackProvider:
-		n, err = NewSlack(f.URL, f.ProxyURL, f.Token, f.CertPool, f.Username, f.Channel)
-	case apiv1.DiscordProvider:
-		n, err = NewDiscord(f.URL, f.ProxyURL, f.Username, f.Channel)
-	case apiv1.RocketProvider:
-		n, err = NewRocket(f.URL, f.ProxyURL, f.CertPool, f.Username, f.Channel)
-	case apiv1.MSTeamsProvider:
-		n, err = NewMSTeams(f.URL, f.ProxyURL, f.CertPool)
-	case apiv1.GitHubProvider:
-		n, err = NewGitHub(f.ProviderUID, f.URL, f.Token, f.CertPool)
-	case apiv1.GitHubDispatchProvider:
-		n, err = NewGitHubDispatch(f.URL, f.Token, f.CertPool)
-	case apiv1.GitLabProvider:
-		n, err = NewGitLab(f.ProviderUID, f.URL, f.Token, f.CertPool)
-	case apiv1.GiteaProvider:
-		n, err = NewGitea(f.ProviderUID, f.URL, f.Token, f.CertPool)
-	case apiv1.BitbucketProvider:
-		n, err = NewBitbucket(f.ProviderUID, f.URL, f.Token, f.CertPool)
-	case apiv1.AzureDevOpsProvider:
-		n, err = NewAzureDevOps(f.ProviderUID, f.URL, f.Token, f.CertPool)
-	case apiv1.GoogleChatProvider:
-		n, err = NewGoogleChat(f.URL, f.ProxyURL)
-	case apiv1.WebexProvider:
-		n, err = NewWebex(f.URL, f.ProxyURL, f.CertPool, f.Channel, f.Token)
-	case apiv1.SentryProvider:
-		n, err = NewSentry(f.CertPool, f.URL, f.Channel)
-	case apiv1.AzureEventHubProvider:
-		n, err = NewAzureEventHub(f.URL, f.Token, f.Channel)
-	case apiv1.TelegramProvider:
-		n, err = NewTelegram(f.Channel, f.Token)
-	case apiv1.LarkProvider:
-		n, err = NewLark(f.URL)
-	case apiv1.Matrix:
-		n, err = NewMatrix(f.URL, f.Token, f.Channel, f.CertPool)
-	case apiv1.OpsgenieProvider:
-		n, err = NewOpsgenie(f.URL, f.ProxyURL, f.CertPool, f.Token)
-	case apiv1.AlertManagerProvider:
-		n, err = NewAlertmanager(f.URL, f.ProxyURL, f.CertPool)
-	case apiv1.GrafanaProvider:
-		n, err = NewGrafana(f.URL, f.ProxyURL, f.Token, f.CertPool, f.Username, f.Password)
-	default:
-		err = fmt.Errorf("provider %s not supported", provider)
-	}
+	return notifier(f.notifierOptions)
+}
 
-	if err != nil {
-		n = &NopNotifier{}
+func genericNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewForwarder(opts.URL, opts.ProxyURL, opts.Headers, opts.TLSConfig, nil)
+}
+
+func genericHMACNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewForwarder(opts.URL, opts.ProxyURL, opts.Headers, opts.TLSConfig, []byte(opts.Token))
+}
+
+func slackNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewSlack(opts.URL, opts.ProxyURL, opts.Token, opts.TLSConfig, opts.Username, opts.Channel)
+}
+
+func discordNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewDiscord(opts.URL, opts.ProxyURL, opts.Username, opts.Channel)
+}
+
+func rocketNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewRocket(opts.URL, opts.ProxyURL, opts.TLSConfig, opts.Username, opts.Channel)
+}
+
+func msteamsNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewMSTeams(opts.URL, opts.ProxyURL, opts.TLSConfig)
+}
+
+func googleChatNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewGoogleChat(opts.URL, opts.ProxyURL)
+}
+
+func googlePubSubNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewGooglePubSub(&opts)
+}
+
+func webexNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewWebex(opts.URL, opts.ProxyURL, opts.TLSConfig, opts.Channel, opts.Token)
+}
+
+func sentryNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewSentry(opts.TLSConfig, opts.URL, opts.Channel)
+}
+
+func azureEventHubNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewAzureEventHub(opts.Context, opts.URL, opts.Token, opts.Channel, opts.ProxyURL, opts.ServiceAccountName, opts.ProviderName, opts.ProviderNamespace, opts.TokenClient, opts.TokenCache)
+}
+
+func telegramNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewTelegram(opts.ProxyURL, opts.Channel, opts.Token)
+}
+
+func larkNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewLark(opts.URL)
+}
+
+func matrixNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewMatrix(opts.URL, opts.Token, opts.Channel, opts.TLSConfig)
+}
+
+func opsgenieNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewOpsgenie(opts.URL, opts.ProxyURL, opts.TLSConfig, opts.Token)
+}
+
+func alertmanagerNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewAlertmanager(opts.URL, opts.ProxyURL, opts.TLSConfig, opts.Token, opts.Username, opts.Password)
+}
+
+func grafanaNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewGrafana(opts.URL, opts.ProxyURL, opts.Token, opts.TLSConfig, opts.Username, opts.Password)
+}
+
+func pagerDutyNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewPagerDuty(opts.URL, opts.ProxyURL, opts.TLSConfig, opts.Channel)
+}
+
+func dataDogNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewDataDog(opts.URL, opts.ProxyURL, opts.TLSConfig, opts.Token)
+}
+
+func natsNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewNATS(opts.URL, opts.Channel, opts.Username, opts.Password)
+}
+
+func gitHubNotifierFunc(opts notifierOptions) (Interface, error) {
+	if opts.Token == "" && opts.Password != "" {
+		opts.Token = opts.Password
 	}
-	return n, err
+	return NewGitHub(opts.CommitStatus, opts.URL, opts.Token, opts.TLSConfig, opts.ProxyURL, opts.ProviderName, opts.ProviderNamespace, opts.SecretData, opts.TokenCache)
+}
+
+func gitHubDispatchNotifierFunc(opts notifierOptions) (Interface, error) {
+	if opts.Token == "" && opts.Password != "" {
+		opts.Token = opts.Password
+	}
+	return NewGitHubDispatch(opts.URL, opts.Token, opts.TLSConfig, opts.ProxyURL, opts.ProviderName, opts.ProviderNamespace, opts.SecretData, opts.TokenCache)
+}
+
+func gitLabNotifierFunc(opts notifierOptions) (Interface, error) {
+	if opts.Token == "" && opts.Password != "" {
+		opts.Token = opts.Password
+	}
+	return NewGitLab(opts.CommitStatus, opts.URL, opts.Token, opts.TLSConfig)
+}
+
+func giteaNotifierFunc(opts notifierOptions) (Interface, error) {
+	if opts.Token == "" && opts.Password != "" {
+		opts.Token = opts.Password
+	}
+	return NewGitea(opts.CommitStatus, opts.URL, opts.ProxyURL, opts.Token, opts.TLSConfig)
+}
+
+func bitbucketServerNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewBitbucketServer(opts.CommitStatus, opts.URL, opts.Token, opts.TLSConfig, opts.Username, opts.Password)
+}
+
+func bitbucketNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewBitbucket(opts.CommitStatus, opts.URL, opts.Token, opts.TLSConfig)
+}
+
+func azureDevOpsNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewAzureDevOps(opts.Context, opts.CommitStatus, opts.URL, opts.Token,
+		opts.TLSConfig, opts.ProxyURL, opts.ServiceAccountName, opts.ProviderName,
+		opts.ProviderNamespace, opts.TokenClient, opts.TokenCache)
 }

@@ -19,7 +19,6 @@ package notifier
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
@@ -34,29 +33,34 @@ import (
 )
 
 type Gitea struct {
-	BaseURL     string
-	Token       string
-	Owner       string
-	Repo        string
-	ProviderUID string
-	Client      *gitea.Client
-	Debug       bool
+	BaseURL      string
+	Token        string
+	Owner        string
+	Repo         string
+	CommitStatus string
+	Client       *gitea.Client
+	Debug        bool
 }
 
 var _ Interface = &Gitea{}
 
-func NewGitea(providerUID string, addr string, token string, certPool *x509.CertPool) (*Gitea, error) {
+func NewGitea(commitStatus string, addr string, proxyURL string, token string, tlsConfig *tls.Config) (*Gitea, error) {
 	if len(token) == 0 {
 		return nil, errors.New("gitea token cannot be empty")
 	}
 
+	// this should never happen
+	if commitStatus == "" {
+		return nil, errors.New("commit status cannot be empty")
+	}
+
 	host, id, err := parseGitAddress(addr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed parsing Git URL: %w", err)
 	}
 
 	if _, err := url.Parse(host); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed parsing host: %w", err)
 	}
 
 	idComponents := strings.Split(id, "/")
@@ -64,33 +68,37 @@ func NewGitea(providerUID string, addr string, token string, certPool *x509.Cert
 		return nil, fmt.Errorf("invalid repository id %q", id)
 	}
 
-	client, err := gitea.NewClient(host, gitea.SetToken(token))
-	if err != nil {
-		return nil, err
+	tr := &http.Transport{}
+	if tlsConfig != nil {
+		tr.TLSClientConfig = tlsConfig
 	}
 
-	if certPool != nil {
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: certPool,
-			},
+	if proxyURL != "" {
+		parsedProxyURL, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, errors.New("invalid proxy URL")
 		}
-		client.SetHTTPClient(&http.Client{Transport: tr})
+		tr.Proxy = http.ProxyURL(parsedProxyURL)
+	}
+
+	client, err := gitea.NewClient(host, gitea.SetToken(token), gitea.SetHTTPClient(&http.Client{Transport: tr}))
+	if err != nil {
+		return nil, fmt.Errorf("failed creating Gitea client: %w", err)
 	}
 
 	return &Gitea{
-		BaseURL:     host,
-		Token:       token,
-		Owner:       idComponents[0],
-		Repo:        idComponents[1],
-		ProviderUID: providerUID,
-		Client:      client,
-		Debug:       os.Getenv("NOTIFIER_GITEA_DEBUG") == "true",
-	}, err
+		BaseURL:      host,
+		Token:        token,
+		Owner:        idComponents[0],
+		Repo:         idComponents[1],
+		CommitStatus: commitStatus,
+		Client:       client,
+		Debug:        os.Getenv("NOTIFIER_GITEA_DEBUG") == "true",
+	}, nil
 }
 
 func (g *Gitea) Post(ctx context.Context, event eventv1.Event) error {
-	revString, ok := event.Metadata[eventv1.MetaRevisionKey]
+	revString, ok := event.GetRevision()
 	if !ok {
 		return errors.New("missing revision metadata")
 	}
@@ -104,7 +112,7 @@ func (g *Gitea) Post(ctx context.Context, event eventv1.Event) error {
 	}
 
 	_, desc := formatNameAndDescription(event)
-	id := generateCommitStatusID(g.ProviderUID, event)
+	id := g.CommitStatus
 
 	status := gitea.CreateStatusOption{
 		State:       state,

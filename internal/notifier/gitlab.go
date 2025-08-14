@@ -19,24 +19,23 @@ package notifier
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
 
-	"github.com/xanzy/go-gitlab"
+	gitlab "gitlab.com/gitlab-org/api/client-go"
 
 	eventv1 "github.com/fluxcd/pkg/apis/event/v1beta1"
 	"github.com/fluxcd/pkg/apis/meta"
 )
 
 type GitLab struct {
-	Id          string
-	ProviderUID string
-	Client      *gitlab.Client
+	Id           string
+	CommitStatus string
+	Client       *gitlab.Client
 }
 
-func NewGitLab(providerUID string, addr string, token string, certPool *x509.CertPool) (*GitLab, error) {
+func NewGitLab(commitStatus string, addr string, token string, tlsConfig *tls.Config) (*GitLab, error) {
 	if len(token) == 0 {
 		return nil, errors.New("gitlab token cannot be empty")
 	}
@@ -46,12 +45,15 @@ func NewGitLab(providerUID string, addr string, token string, certPool *x509.Cer
 		return nil, err
 	}
 
+	// this should never happen
+	if commitStatus == "" {
+		return nil, errors.New("commit status cannot be empty")
+	}
+
 	opts := []gitlab.ClientOptionFunc{gitlab.WithBaseURL(host)}
-	if certPool != nil {
+	if tlsConfig != nil {
 		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: certPool,
-			},
+			TLSClientConfig: tlsConfig,
 		}
 		hc := &http.Client{Transport: tr}
 		opts = append(opts, gitlab.WithHTTPClient(hc))
@@ -62,9 +64,9 @@ func NewGitLab(providerUID string, addr string, token string, certPool *x509.Cer
 	}
 
 	gitlab := &GitLab{
-		Id:          id,
-		ProviderUID: providerUID,
-		Client:      client,
+		Id:           id,
+		CommitStatus: commitStatus,
+		Client:       client,
 	}
 
 	return gitlab, nil
@@ -77,7 +79,7 @@ func (g *GitLab) Post(ctx context.Context, event eventv1.Event) error {
 		return nil
 	}
 
-	revString, ok := event.Metadata[eventv1.MetaRevisionKey]
+	revString, ok := event.GetRevision()
 	if !ok {
 		return errors.New("missing revision metadata")
 	}
@@ -91,7 +93,7 @@ func (g *GitLab) Post(ctx context.Context, event eventv1.Event) error {
 	}
 
 	_, desc := formatNameAndDescription(event)
-	id := generateCommitStatusID(g.ProviderUID, event)
+	id := g.CommitStatus
 	status := &gitlab.CommitStatus{
 		Name:        id,
 		SHA:         rev,
@@ -99,7 +101,9 @@ func (g *GitLab) Post(ctx context.Context, event eventv1.Event) error {
 		Description: desc,
 	}
 
-	getOpt := &gitlab.GetCommitStatusesOptions{}
+	getOpt := &gitlab.GetCommitStatusesOptions{
+		Name: &status.Name,
+	}
 	statuses, _, err := g.Client.Commits.GetCommitStatuses(g.Id, rev, getOpt, gitlab.WithContext(ctx))
 	if err != nil {
 		return fmt.Errorf("unable to list commit status: %s", err)

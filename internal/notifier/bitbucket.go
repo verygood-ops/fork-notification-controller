@@ -19,7 +19,6 @@ package notifier
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,16 +33,21 @@ import (
 
 // Bitbucket is a Bitbucket Server notifier.
 type Bitbucket struct {
-	Owner       string
-	Repo        string
-	ProviderUID string
-	Client      *bitbucket.Client
+	Owner        string
+	Repo         string
+	CommitStatus string
+	Client       *bitbucket.Client
 }
 
 // NewBitbucket creates and returns a new Bitbucket notifier.
-func NewBitbucket(providerUID string, addr string, token string, certPool *x509.CertPool) (*Bitbucket, error) {
+func NewBitbucket(commitStatus string, addr string, token string, tlsConfig *tls.Config) (*Bitbucket, error) {
 	if len(token) == 0 {
 		return nil, errors.New("bitbucket token cannot be empty")
+	}
+
+	// this should never happen
+	if commitStatus == "" {
+		return nil, errors.New("commit status cannot be empty")
 	}
 
 	_, id, err := parseGitAddress(addr)
@@ -66,21 +70,19 @@ func NewBitbucket(providerUID string, addr string, token string, certPool *x509.
 	repo := comp[1]
 
 	client := bitbucket.NewBasicAuth(username, password)
-	if certPool != nil {
+	if tlsConfig != nil {
 		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: certPool,
-			},
+			TLSClientConfig: tlsConfig,
 		}
 		hc := &http.Client{Transport: tr}
 		client.HttpClient = hc
 	}
 
 	return &Bitbucket{
-		Owner:       owner,
-		Repo:        repo,
-		ProviderUID: providerUID,
-		Client:      client,
+		Owner:        owner,
+		Repo:         repo,
+		CommitStatus: commitStatus,
+		Client:       client,
 	}, nil
 }
 
@@ -91,7 +93,7 @@ func (b Bitbucket) Post(ctx context.Context, event eventv1.Event) error {
 		return nil
 	}
 
-	revString, ok := event.Metadata[eventv1.MetaRevisionKey]
+	revString, ok := event.GetRevision()
 	if !ok {
 		return errors.New("missing revision metadata")
 	}
@@ -105,7 +107,7 @@ func (b Bitbucket) Post(ctx context.Context, event eventv1.Event) error {
 	}
 
 	name, desc := formatNameAndDescription(event)
-	id := generateCommitStatusID(b.ProviderUID, event)
+	id := b.CommitStatus
 	// key has a limitation of 40 characters in bitbucket api
 	key := sha1String(id)
 

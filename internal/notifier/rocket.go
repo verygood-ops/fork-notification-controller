@@ -18,8 +18,7 @@ package notifier
 
 import (
 	"context"
-	"crypto/x509"
-	"errors"
+	"crypto/tls"
 	"fmt"
 	"net/url"
 	"strings"
@@ -29,34 +28,26 @@ import (
 
 // Rocket holds the hook URL
 type Rocket struct {
-	URL      string
-	ProxyURL string
-	Username string
-	Channel  string
-	CertPool *x509.CertPool
+	URL       string
+	ProxyURL  string
+	Username  string
+	Channel   string
+	TLSConfig *tls.Config
 }
 
 // NewRocket validates the Rocket URL and returns a Rocket object
-func NewRocket(hookURL string, proxyURL string, certPool *x509.CertPool, username string, channel string) (*Rocket, error) {
+func NewRocket(hookURL string, proxyURL string, tlsConfig *tls.Config, username string, channel string) (*Rocket, error) {
 	_, err := url.ParseRequestURI(hookURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Rocket hook URL %s: '%w'", hookURL, err)
 	}
 
-	if username == "" {
-		return nil, errors.New("empty Rocket username")
-	}
-
-	if channel == "" {
-		return nil, errors.New("empty Rocket channel")
-	}
-
 	return &Rocket{
-		Channel:  channel,
-		URL:      hookURL,
-		ProxyURL: proxyURL,
-		Username: username,
-		CertPool: certPool,
+		Channel:   channel,
+		URL:       hookURL,
+		ProxyURL:  proxyURL,
+		Username:  username,
+		TLSConfig: tlsConfig,
 	}, nil
 }
 
@@ -92,8 +83,15 @@ func (s *Rocket) Post(ctx context.Context, event eventv1.Event) error {
 
 	payload.Attachments = []SlackAttachment{a}
 
-	err := postMessage(ctx, s.URL, s.ProxyURL, s.CertPool, payload)
-	if err != nil {
+	var opts []postOption
+	if s.ProxyURL != "" {
+		opts = append(opts, withProxy(s.ProxyURL))
+	}
+	if s.TLSConfig != nil {
+		opts = append(opts, withTLSConfig(s.TLSConfig))
+	}
+
+	if err := postMessage(ctx, s.URL, payload, opts...); err != nil {
 		return fmt.Errorf("postMessage failed: %w", err)
 	}
 	return nil

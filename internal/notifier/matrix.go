@@ -3,7 +3,7 @@ package notifier
 import (
 	"context"
 	"crypto/sha1"
-	"crypto/x509"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,10 +15,10 @@ import (
 )
 
 type Matrix struct {
-	Token    string
-	URL      string
-	RoomId   string
-	CertPool *x509.CertPool
+	Token     string
+	URL       string
+	RoomId    string
+	TLSConfig *tls.Config
 }
 
 type MatrixPayload struct {
@@ -26,17 +26,17 @@ type MatrixPayload struct {
 	MsgType string `json:"msgtype"`
 }
 
-func NewMatrix(serverURL, token, roomId string, certPool *x509.CertPool) (*Matrix, error) {
+func NewMatrix(serverURL, token, roomId string, tlsConfig *tls.Config) (*Matrix, error) {
 	_, err := url.ParseRequestURI(serverURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Matrix homeserver URL %s: '%w'", serverURL, err)
 	}
 
 	return &Matrix{
-		URL:      serverURL,
-		RoomId:   roomId,
-		Token:    token,
-		CertPool: certPool,
+		URL:       serverURL,
+		RoomId:    roomId,
+		Token:     token,
+		TLSConfig: tlsConfig,
 	}, nil
 }
 
@@ -65,11 +65,17 @@ func (m *Matrix) Post(ctx context.Context, event eventv1.Event) error {
 		MsgType: "m.text",
 	}
 
-	err = postMessage(ctx, fullURL, "", m.CertPool, payload, func(request *retryablehttp.Request) {
-		request.Method = http.MethodPut
-		request.Header.Add("Authorization", "Bearer "+m.Token)
-	})
-	if err != nil {
+	opts := []postOption{
+		withRequestModifier(func(req *retryablehttp.Request) {
+			req.Method = http.MethodPut
+			req.Header.Add("Authorization", "Bearer "+m.Token)
+		}),
+	}
+	if m.TLSConfig != nil {
+		opts = append(opts, withTLSConfig(m.TLSConfig))
+	}
+
+	if err := postMessage(ctx, fullURL, payload, opts...); err != nil {
 		return fmt.Errorf("postMessage failed: %w", err)
 	}
 

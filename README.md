@@ -17,7 +17,7 @@ make docker-push
 ```
 
 Event forwarder and notification dispatcher for the [GitOps Toolkit](https://fluxcd.io/flux/components/) controllers.
-The notification-controller is an implementation of the [notification.toolkit.fluxcd.io](docs/spec/v1beta1/README.md)
+The notification-controller is an implementation of the [notification.toolkit.fluxcd.io](docs/spec/v1beta3/README.md)
 API based on the specifications described in the [RFC](docs/spec/README.md).
 
 ![overview](docs/diagrams/notification-controller-overview.png)

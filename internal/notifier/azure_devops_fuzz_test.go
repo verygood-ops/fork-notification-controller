@@ -18,6 +18,7 @@ package notifier
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"io"
@@ -33,12 +34,12 @@ import (
 const apiLocations = `{"count":0,"value":[{"area":"","id":"428dd4fb-fda5-4722-af02-9313b80305da","routeTemplate":"","resourceName":"","maxVersion":"6.0","minVersion":"5.0","releasedVersion":"6.0"}]}`
 
 func Fuzz_AzureDevOps(f *testing.F) {
-	f.Add("0c9c2e41-d2f9-4f9b-9c41-bebc1984d67a", "alakazam", "org/proj/_git/repo", "revision/dsa123a", "error", "", []byte{}, []byte(`{"count":1,"value":[{"state":"error","description":"","context":{"genre":"fluxcd","name":"/"}}]}`))
-	f.Add("0c9c2e41-d2f9-4f9b-9c41-bebc1984d67a", "alakazam", "org/proj/_git/repo", "revision/dsa123a", "info", "", []byte{}, []byte(`{"count":1,"value":[{"state":"info","description":"","context":{"genre":"fluxcd","name":"/"}}]}`))
-	f.Add("0c9c2e41-d2f9-4f9b-9c41-bebc1984d67a", "alakazam", "org/proj/_git/repo", "revision/dsa123a", "info", "", []byte{}, []byte(`{"count":0,"value":[]}`))
-	f.Add("0c9c2e41-d2f9-4f9b-9c41-bebc1984d67a", "alakazam", "org/proj/_git/repo", "", "", "Progressing", []byte{}, []byte{})
+	f.Add("kustomization/gitops-system/0c9c2e41", "alakazam", "org/proj/_git/repo", "revision/dsa123a", "error", "", []byte{}, []byte(`{"count":1,"value":[{"state":"error","description":"","context":{"genre":"fluxcd","name":"/"}}]}`))
+	f.Add("kustomization/gitops-system/0c9c2e41", "alakazam", "org/proj/_git/repo", "revision/dsa123a", "info", "", []byte{}, []byte(`{"count":1,"value":[{"state":"info","description":"","context":{"genre":"fluxcd","name":"/"}}]}`))
+	f.Add("kustomization/gitops-system/0c9c2e41", "alakazam", "org/proj/_git/repo", "revision/dsa123a", "info", "", []byte{}, []byte(`{"count":0,"value":[]}`))
+	f.Add("kustomization/gitops-system/0c9c2e41", "alakazam", "org/proj/_git/repo", "", "", "Progressing", []byte{}, []byte{})
 
-	f.Fuzz(func(t *testing.T, uuid, token, urlSuffix, revision, severity, reason string, seed, response []byte) {
+	f.Fuzz(func(t *testing.T, commitStatus, token, urlSuffix, revision, severity, reason string, seed, response []byte) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasSuffix(r.URL.Path, "_apis") {
 				w.Write([]byte(apiLocations))
@@ -54,7 +55,8 @@ func Fuzz_AzureDevOps(f *testing.F) {
 		var cert x509.CertPool
 		_ = fuzz.NewConsumer(seed).GenerateStruct(&cert)
 
-		azureDevOps, err := NewAzureDevOps(uuid, fmt.Sprintf("%s/%s", ts.URL, urlSuffix), token, &cert)
+		tlsConfig := &tls.Config{RootCAs: &cert}
+		azureDevOps, err := NewAzureDevOps(context.TODO(), commitStatus, fmt.Sprintf("%s/%s", ts.URL, urlSuffix), token, tlsConfig, "", "", "", "", nil, nil)
 		if err != nil {
 			return
 		}

@@ -2,6 +2,660 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.6.0
+
+**Release date:** 2025-05-27
+
+This minor release comes with various bug fixes and improvements.
+
+### Provider
+
+The `azureeventhub` provider now supports workload identity both
+at the controller and object levels. For object level, the
+`.spec.serviceAccountName` field can be set to the name of a
+service account in the same namespace that was configured with
+a Managed Identity.
+For object level to work, the controller feature gate
+`ObjectLevelWorkloadIdentity` must be enabled. See a complete guide
+[here](https://fluxcd.io/flux/integrations/azure/).
+
+The `github` and `githubdispatch` providers now support authenticating
+with a GitHub App. See docs
+[here](https://fluxcd.io/flux/components/notification/providers/#github)
+and
+[here](https://fluxcd.io/flux/components/notification/providers/#github-dispatch).
+
+For commit status providers it is now possible to define a custom
+status string by defining a CEL expression in the `.spec.commitStatusExpr`
+field. The variables `event`, `alert` and `provider` are available
+for the CEL expression. See
+[docs](https://fluxcd.io/flux/components/notification/providers/#custom-commit-status-messages).
+
+### General updates
+
+In addition, the Kubernetes dependencies have been updated to v1.33 and
+various other controller dependencies have been updated to their latest
+version. The controller is now built with Go 1.24.
+
+Fixes:
+- Fix Slack chat.postMessage error handling
+  [#1086](https://github.com/fluxcd/notification-controller/pull/1086)
+- Fix pass 'certPool' to Gitea client on creation
+  [#1084](https://github.com/fluxcd/notification-controller/pull/1084)
+- CrossNamespaceObjectReference: Fix MaxLength validation to kubernetes max size of 253
+  [#1108](https://github.com/fluxcd/notification-controller/pull/1108)
+- Sanitize proxy error logging
+  [#1093](https://github.com/fluxcd/notification-controller/pull/1093)
+
+Improvements:
+- [RFC-0010] Workload Identity support for `azureeventhub` provider
+  [#1106](https://github.com/fluxcd/notification-controller/pull/1106)
+  [#1116](https://github.com/fluxcd/notification-controller/pull/1116)
+  [#1120](https://github.com/fluxcd/notification-controller/pull/1120)
+  [#1109](https://github.com/fluxcd/notification-controller/pull/1109)
+  [#1112](https://github.com/fluxcd/notification-controller/pull/1112)
+- GitHub App authentication support for `github` and `githubdispatch`
+  [#1058](https://github.com/fluxcd/notification-controller/pull/1058)
+- Support CEL expressions to construct commit statuses
+  [#1068](https://github.com/fluxcd/notification-controller/pull/1068)
+- Add proxy support to `gitea` provider
+  [#1087](https://github.com/fluxcd/notification-controller/pull/1087)
+- Various dependency updates
+  [#1101](https://github.com/fluxcd/notification-controller/pull/1101)
+  [#1119](https://github.com/fluxcd/notification-controller/pull/1119)
+  [#1118](https://github.com/fluxcd/notification-controller/pull/1118)
+  [#1113](https://github.com/fluxcd/notification-controller/pull/1113)
+  [#1104](https://github.com/fluxcd/notification-controller/pull/1104)
+
+## 1.5.0
+
+**Release date:** 2025-02-13
+
+This minor release comes with various bug fixes and improvements.
+
+### Alert
+
+Now notification-controller also sends event metadata specified in Flux objects through
+annotations. See [docs](https://fluxcd.io/flux/components/notification/alerts/#event-metadata-from-object-annotations).
+
+Now notification-controller is also capable of updating Git commit statuses
+from events about Kustomizations that consume OCIRepositories. See
+[docs](https://fluxcd.io/flux/cheatsheets/oci-artifacts/#git-commit-status-updates).
+
+### Receiver
+
+The Receiver API now supports filtering the declared resources that
+match a given Common Expression Language (CEL) expression. See
+[docs](https://fluxcd.io/flux/components/notification/receivers/#filtering-reconciled-objects-with-cel).
+
+In addition, the Kubernetes dependencies have been updated to v1.32.1 and
+various other controller dependencies have been updated to their latest
+version.
+
+Fixes:
+- Remove deprecated object metrics from controllers
+  [#997](https://github.com/fluxcd/notification-controller/pull/997)
+- msteams notifier: adaptive cards full width
+  [#1017](https://github.com/fluxcd/notification-controller/pull/1017)
+- fix: adding of duplicate commit statuses in gitlab
+  [#1010](https://github.com/fluxcd/notification-controller/pull/1010)
+- Fix add missing return statement and a few style issues
+  [#1039](https://github.com/fluxcd/notification-controller/pull/1039)
+
+Improvements:
+- [RFC-0008] Custom Event Metadata from Annotations
+  [#1014](https://github.com/fluxcd/notification-controller/pull/1014)
+- Add support for MetaOriginRevisionKey from the Event API
+  [#1018](https://github.com/fluxcd/notification-controller/pull/1018)
+- Add subsection for Git providers supporting commit status updates
+  [#1019](https://github.com/fluxcd/notification-controller/pull/1019)
+- Add support for Bearer Token authentication to Provider alertmanager
+  [#1021](https://github.com/fluxcd/notification-controller/pull/1021)
+- Enforce namespace check on receiver
+  [#1022](https://github.com/fluxcd/notification-controller/pull/1022)
+- Implement Receiver resource filtering with CEL
+  [#948](https://github.com/fluxcd/notification-controller/pull/948)
+- Clarify gitlab provider usage
+  [#953](https://github.com/fluxcd/notification-controller/pull/953)
+- Add involved object reference as annotations for the grafana provider
+  [#1040](https://github.com/fluxcd/notification-controller/pull/1040)
+- Improvements after CEL resource filtering
+  [#1041](https://github.com/fluxcd/notification-controller/pull/1041)
+- Various dependency updates
+  [#1002](https://github.com/fluxcd/notification-controller/pull/1002)
+  [#1016](https://github.com/fluxcd/notification-controller/pull/1016)
+  [#1023](https://github.com/fluxcd/notification-controller/pull/1023)
+  [#1025](https://github.com/fluxcd/notification-controller/pull/1025)
+  [#1027](https://github.com/fluxcd/notification-controller/pull/1027)
+  [#1032](https://github.com/fluxcd/notification-controller/pull/1032)
+  [#1036](https://github.com/fluxcd/notification-controller/pull/1036)
+  [#1037](https://github.com/fluxcd/notification-controller/pull/1037)
+  [#1042](https://github.com/fluxcd/notification-controller/pull/1042)
+
+## 1.4.0
+
+**Release date:** 2024-09-27
+
+This minor release comes with various bug fixes and improvements.
+
+MS Teams Provider has been updated to support MS Adaptive Card payloads.
+This allows users to migrate from the deprecated
+[Office 365 Connector for Incoming Webhooks](https://devblogs.microsoft.com/microsoft365dev/retirement-of-office-365-connectors-within-microsoft-teams/)
+to the new [Microsoft Teams Incoming Webhooks with Workflows](https://support.microsoft.com/en-us/office/create-incoming-webhooks-with-workflows-for-microsoft-teams-8ae491c7-0394-4861-ba59-055e33f75498).
+See the [Provider API documentation](https://fluxcd.io/flux/components/notification/providers/#microsoft-teams)
+for more information. After getting the URL for the new Incoming Webhook Workflow,
+update the secret used by the `msteams` Provider object with the new URL.
+
+In addition, the Kubernetes dependencies have been updated to v1.31.1 and
+various other controller dependencies have been updated to their latest
+version. The controller is now built with Go 1.23.
+
+Fixes:
+- telegram notifier should escape with metadata key
+  [#829](https://github.com/fluxcd/notification-controller/pull/829)
+- docs: use stringData for secret of GitHub PAT
+  [#873](https://github.com/fluxcd/notification-controller/pull/873)
+- Fix incorrect use of format strings with the conditions package.
+  [#879](https://github.com/fluxcd/notification-controller/pull/879)
+
+Improvements:
+- New flag to disable detailed metrics for path
+  [#841](https://github.com/fluxcd/notification-controller/pull/841)
+- Fix telegram test flake
+  [#894](https://github.com/fluxcd/notification-controller/pull/894)
+- Build with Go 1.23
+  [#907](https://github.com/fluxcd/notification-controller/pull/907)
+- Add MS Adaptive Card payload to msteams Provider
+  [#920](https://github.com/fluxcd/notification-controller/pull/920)
+- Various dependency updates
+  [#845](https://github.com/fluxcd/notification-controller/pull/845)
+  [#855](https://github.com/fluxcd/notification-controller/pull/855)
+  [#854](https://github.com/fluxcd/notification-controller/pull/854)
+  [#857](https://github.com/fluxcd/notification-controller/pull/857)
+  [#865](https://github.com/fluxcd/notification-controller/pull/865)
+  [#866](https://github.com/fluxcd/notification-controller/pull/866)
+  [#905](https://github.com/fluxcd/notification-controller/pull/905)
+  [#903](https://github.com/fluxcd/notification-controller/pull/903)
+  [#912](https://github.com/fluxcd/notification-controller/pull/912)
+  [#925](https://github.com/fluxcd/notification-controller/pull/925)
+  [#931](https://github.com/fluxcd/notification-controller/pull/931)
+  [#932](https://github.com/fluxcd/notification-controller/pull/932)
+  [#933](https://github.com/fluxcd/notification-controller/pull/933)
+  [#934](https://github.com/fluxcd/notification-controller/pull/934)
+
+## 1.3.0
+
+**Release date:** 2024-05-06
+
+This minor release comes with new features, improvements and bug fixes.
+
+The `Receiver` API has been extended to support CDEvents,
+for more information, please see the
+[CDEvents Receiver API documentation](https://github.com/fluxcd/notification-controller/blob/release/v1.3.x/docs/spec/v1/receivers.md#cdevents).
+
+Starting with this version, the controller allows grouping alerts for Alertmanager
+by setting the `startsAt` label instead of `timestamp`. When sending alerts to
+OpsGenie, the controller now sets the `severity` field to the alert's details.
+
+In addition, the controller dependencies have been updated to Kubernetes v1.30
+and controller-runtime v0.18. Various other dependencies have also been updated to
+their latest version to patch upstream CVEs.
+
+Lastly, the controller is now built with Go 1.22.
+
+Improvements:
+- Add CDEvent Receiver Support
+  [#772](https://github.com/fluxcd/notification-controller/pull/772)
+- Add severity to opsgenie alerts
+  [#796](https://github.com/fluxcd/notification-controller/pull/796)
+- Alertmanager: Change timestamp label to .StartsAt
+  [#795](https://github.com/fluxcd/notification-controller/pull/795)
+- Use `password` as fallback for the Git provider `token` auth
+  [#790](https://github.com/fluxcd/notification-controller/pull/790)
+- Add support for Bitbucket Context path
+  [#747](https://github.com/fluxcd/notification-controller/pull/747)
+- Various dependency updates
+  [#816](https://github.com/fluxcd/notification-controller/pull/816)
+  [#814](https://github.com/fluxcd/notification-controller/pull/814)
+  [#813](https://github.com/fluxcd/notification-controller/pull/813)
+  [#810](https://github.com/fluxcd/notification-controller/pull/810)
+  [#809](https://github.com/fluxcd/notification-controller/pull/809)
+  [#787](https://github.com/fluxcd/notification-controller/pull/787)
+  [#783](https://github.com/fluxcd/notification-controller/pull/783)
+  [#763](https://github.com/fluxcd/notification-controller/pull/763)
+
+Fixes:
+- Sanitize provider data loaded from secret
+  [#789](https://github.com/fluxcd/notification-controller/pull/789)
+- Fix timeout propagation for alerts
+  [#757](https://github.com/fluxcd/notification-controller/pull/757)
+- Fix Telegram MarkdownV2 escaping
+  [#776](https://github.com/fluxcd/notification-controller/pull/776)
+- Remove `genclient:Namespaced` tag
+  [#749](https://github.com/fluxcd/notification-controller/pull/749)
+
+## 1.2.4
+
+**Release date:** 2024-02-01
+
+This patch release fixes various issues, updates the Kubernetes dependencies
+to v1.28.6 and various other dependencies to their latest version to patch
+upstream CVEs.
+
+Improvements:
+- Various dependency updates
+  [#727](https://github.com/fluxcd/notification-controller/pull/727)
+  [#726](https://github.com/fluxcd/notification-controller/pull/726)
+  [#721](https://github.com/fluxcd/notification-controller/pull/721)
+  [#718](https://github.com/fluxcd/notification-controller/pull/718)
+  [#707](https://github.com/fluxcd/notification-controller/pull/707)
+  [#695](https://github.com/fluxcd/notification-controller/pull/695)
+
+Fixes:
+- Fix BitBucket status update panic
+  [#722](https://github.com/fluxcd/notification-controller/pull/722)
+- fix typo in docs/spec/v1beta3/providers.md
+  [#699](https://github.com/fluxcd/notification-controller/pull/699)
+- fix(grafana-provider): replace ":" character in eventMetadata
+  [#703](https://github.com/fluxcd/notification-controller/pull/703)
+- Remove old/incorrect API version usage
+  [#693](https://github.com/fluxcd/notification-controller/pull/693)
+
+## 1.2.3
+
+**Release date:** 2023-12-14
+
+This patch release fixes various issues, most notably, the Provider v1beta3 API
+backwards compatibility issue when `.spec.interval` was explicitly set in a
+v1beta2 version of Provider.
+
+Fixes:
+- Exclude eventv1.MetaTokenKey from event metadata
+  [#686](https://github.com/fluxcd/notification-controller/pull/686)
+- Add .spec.interval in v1beta3 Provider
+  [#683](https://github.com/fluxcd/notification-controller/pull/683)
+- Remove URL syntax validation for provider address entirely
+  [#682](https://github.com/fluxcd/notification-controller/pull/682)
+
+## 1.2.2
+
+**Release date:** 2023-12-11
+
+This patch releases updates a variety of dependencies, including an update of
+the container base image to Alpine v3.19.
+
+Improvements:
+- build: update Alpine to 3.19
+  [#675](https://github.com/fluxcd/notification-controller/pull/675)
+- Update dependencies
+  [#677](https://github.com/fluxcd/notification-controller/pull/677)
+
+## 1.2.1
+
+**Release date:** 2023-12-08
+
+This patch release updates the Go version the controller is built with to
+`1.21.x`, while mitigating recently published security vulnerabilities in the
+`net/http` package.
+
+In addition, it ensures static analyzers no longer detect a vulnerability in the
+`whilp/git-urls` module by using `chainguard-dev/git-urls`. For which the
+(potential) issue itself got already addressed internally in the [previous
+v1.2.0 release](#120).
+
+Lastly, a small number of dependencies got updated to their latest versions.
+
+Improvements:
+- Update Go to 1.21.x
+  [#666](https://github.com/fluxcd/notification-controller/pull/666)
+- Replace whilp/git-urls module by chainguard-dev/git-urls
+  [#667](https://github.com/fluxcd/notification-controller/pull/667)
+- Update dependencies
+  [#669](https://github.com/fluxcd/notification-controller/pull/669)
+
+## 1.2.0
+
+**Release date:** 2023-12-05
+
+This minor release graduates the notification `Alert` and `Provider` APIs to
+`v1beta3`. In addition, this version comes with alert Provider support for
+[BitBucket
+Server](https://github.com/fluxcd/notification-controller/blob/api/v1.2.0/docs/spec/v1beta3/providers.md#bitbucket-serverdata-center)
+and
+[NATS](https://github.com/fluxcd/notification-controller/blob/api/v1.2.0/docs/spec/v1beta3/providers.md#nats).
+
+### `notification.toolkit.fluxcd.io/v1beta3`
+
+After upgrading the controller to v1.2.0, please update the notification Custom
+Resources for `Alert` and `Provider` in Git by replacing
+`notification.toolkit.fluxcd.io/v1beta2` with
+`notification.toolkit.fluxcd.io/v1beta3` in all the YAML manifests.
+
+#### Static Alerts and Providers
+
+The notification Alert and Provider API resources will become static objects
+with configurations that will be used by the event handlers for processing the
+respective incoming events. They will no longer be reconciled by a reconciler
+and will not advertise any status. Once `Alerts` and `Providers` are created,
+they can be considered ready. Users of
+[kstatus](https://github.com/kubernetes-sigs/cli-utils/blob/master/pkg/kstatus/README.md)
+shouldn't see any difference. Existing `Alerts` and `Providers` objects in
+`v1beta2` API will undergo a one-time automatic migration to be converted into
+static objects without any status.
+
+#### Enhanced Alert events
+
+The event handler will emit Kubernetes native events on the respective Alert
+object for any relevant information, including failures due to any
+misconfiguration.
+
+Improvements:
+- Add Provider for NATS Subject
+  [#651](https://github.com/fluxcd/notification-controller/pull/651)
+- Cap provider address at 2048 bytes
+  [#654](https://github.com/fluxcd/notification-controller/pull/654)
+- Refactor events and introduce v1beta3 API for Alert and Provider
+  [#540](https://github.com/fluxcd/notification-controller/pull/540)
+- Add Bitbucket server/Bitbucket Data Center provider for git commit status
+  [#639](https://github.com/fluxcd/notification-controller/pull/639)
+- Address miscellaneous issues throughout code base
+  [#627](https://github.com/fluxcd/notification-controller/pull/627)
+- Update dependencies
+  [#609](https://github.com/fluxcd/notification-controller/pull/609)
+  [#612](https://github.com/fluxcd/notification-controller/pull/612)
+  [#613](https://github.com/fluxcd/notification-controller/pull/613)
+  [#617](https://github.com/fluxcd/notification-controller/pull/617)
+  [#621](https://github.com/fluxcd/notification-controller/pull/621)
+  [#623](https://github.com/fluxcd/notification-controller/pull/623)
+  [#628](https://github.com/fluxcd/notification-controller/pull/628)
+  [#629](https://github.com/fluxcd/notification-controller/pull/629)
+  [#632](https://github.com/fluxcd/notification-controller/pull/632)
+  [#635](https://github.com/fluxcd/notification-controller/pull/635)
+  [#637](https://github.com/fluxcd/notification-controller/pull/637)
+  [#641](https://github.com/fluxcd/notification-controller/pull/641)
+  [#643](https://github.com/fluxcd/notification-controller/pull/643)
+  [#646](https://github.com/fluxcd/notification-controller/pull/646)
+  [#648](https://github.com/fluxcd/notification-controller/pull/648)
+  [#652](https://github.com/fluxcd/notification-controller/pull/652)
+  [#656](https://github.com/fluxcd/notification-controller/pull/656)
+  [#657](https://github.com/fluxcd/notification-controller/pull/657)
+
+Fixes:
+- Fix README.md links to notification APIs
+  [#619](https://github.com/fluxcd/notification-controller/pull/619)
+
+## 1.1.0
+
+**Release date:** 2023-08-23
+
+This minor release comes with support for sending alerts
+to [PagerDuty](https://github.com/fluxcd/notification-controller/blob/v1.1.0/docs/spec/v1beta2/providers.md#datadog).
+
+In addition, this version deprecates the usage of the `caFile` key in favor of `ca.crt`
+for the `.spec.certSecretRef` secret in the Provider v1beta2 API.
+
+Starting with this version, the controller now stops exporting an object's
+metrics as soon as the object has been deleted.
+
+Improvements:
+
+- Add support for Datadog
+  [#592](https://github.com/fluxcd/notification-controller/pull/592)
+- Adopt Kubernetes style TLS Secret
+  [#597](https://github.com/fluxcd/notification-controller/pull/597)
+- Remove checks for empty user and channel parameters in Rocket notifier
+  [#603](https://github.com/fluxcd/notification-controller/pull/603)
+- Clarify permission requirements for Gitea provider token
+  [#583](https://github.com/fluxcd/notification-controller/pull/583)
+- Align docs structure with other controllers
+  [#582](https://github.com/fluxcd/notification-controller/pull/582)
+- Update dependencies
+  [#600](https://github.com/fluxcd/notification-controller/pull/600)
+  [#606](https://github.com/fluxcd/notification-controller/pull/606)
+
+Fixes:
+
+- Use TrimPrefix instead of TrimLeft
+  [#590](https://github.com/fluxcd/notification-controller/pull/590)
+- Handle delete before adding finalizer
+  [#584](https://github.com/fluxcd/notification-controller/pull/584)
+- Delete stale metrics on object delete
+  [#599](https://github.com/fluxcd/notification-controller/pull/599)
+- docs: change key type to `[]byte` in provider spec
+  [#585](https://github.com/fluxcd/notification-controller/pull/585)
+
+## 1.0.0
+
+**Release date:** 2023-07-04
+
+This is the first stable release of the controller. From now on, this controller
+follows the [Flux 2 release cadence and support pledge](https://fluxcd.io/flux/releases/).
+
+Starting with this version, the build, release and provenance portions of the
+Flux project supply chain [provisionally meet SLSA Build Level 3](https://fluxcd.io/flux/security/slsa-assessment/).
+
+This release comes with support for sending alerts
+to [PagerDuty](https://github.com/fluxcd/notification-controller/blob/v1.0.0/docs/spec/v1beta2/providers.md#pagerduty)
+and [Google Pub/Sub](https://github.com/fluxcd/notification-controller/blob/v1.0.0/docs/spec/v1beta2/providers.md#google-pubsub).
+
+In addition, dependencies have been updated
+to their latest version, including an update of Kubernetes to v1.27.3.
+
+For a comprehensive list of changes since `v0.33.x`, please refer to the
+changelog for [v1.0.0-rc.1](#100-rc1), [v1.0.0-rc.2](#100-rc2),
+[v1.0.0-rc.3](#100-rc3) and [`v1.0.0-rc.4](#100-rc4).
+
+Improvements:
+
+- Add support for PagerDuty
+  [#527](https://github.com/fluxcd/notification-controller/pull/527)
+- Add support for Google Pub/Sub
+  [#543](https://github.com/fluxcd/notification-controller/pull/543)
+- Lift HTTP/S validation from Provider spec.address
+  [#565](https://github.com/fluxcd/notification-controller/pull/565)
+- Improve error messages in Gitea notifier
+  [#556](https://github.com/fluxcd/notification-controller/pull/556)
+- Make Gitea tests independent of 3rd-party service
+  [#558](https://github.com/fluxcd/notification-controller/pull/558)
+- Align go.mod version with Kubernetes (Go 1.20)
+  [#558](https://github.com/fluxcd/notification-controller/pull/558)
+- Update dependencies
+  [#563](https://github.com/fluxcd/notification-controller/pull/563)
+- Update GCP dependencies
+  [#569](https://github.com/fluxcd/notification-controller/pull/569)
+
+Fixes:
+
+- Fix Alert `.spec.eventMetadata` documentation
+  [#541](https://github.com/fluxcd/notification-controller/pull/541)
+- Fix `TestProviderReconciler_Reconcile/finalizes_suspended_object` to use patch instead of update
+  [#550](https://github.com/fluxcd/notification-controller/pull/550)
+
+## 1.0.0-rc.4
+
+**Release date:** 2023-05-26
+
+This release candidate comes with support for Kubernetes v1.27.
+
+The `Event` API has been modified to have a dedicated key for `metadata` called
+`token`. The value of the `token` key is meant to be defined on a per event
+emitter basis for uniquely identifying the contents of the event payload.
+This key if present, is included in calculating the unique key used for rate
+limiting events.
+Furthermore, the event attributes are prefixed with an identifier to avoid
+collisions between different event attributes.
+
+In addition, a bug in the event rate limiting key calculation logic which led
+to the inconsideration of the revision specified in `.metadata` of the event has
+been fixed.
+
+Lastly, the behavior of `.spec.eventMetadata` has been modified such that if a
+key present in the map already exists in the original event's `metadata`, then
+the key in the latter takes precedence and an error log is printed for visibility.
+
+Improvements:
+
+- Include eventv1.MetaTokenKey on event rate limiting key calculation
+  [#530](https://github.com/fluxcd/notification-controller/pull/530)
+- Update dependencies and Kubernetes to 1.27.2
+  [#532](https://github.com/fluxcd/notification-controller/pull/532)
+- Remove the tini supervisor
+  [#533](https://github.com/fluxcd/notification-controller/pull/533)
+- Prefix event key attributes with identifier
+  [#534](https://github.com/fluxcd/notification-controller/pull/534)
+- Update workflows and enable dependabot
+  [#535](https://github.com/fluxcd/notification-controller/pull/535)
+- build(deps): bump github/codeql-action from 2.3.3 to 2.3.4
+  [#536](https://github.com/fluxcd/notification-controller/pull/536)
+
+Fixes:
+
+- Fix revision discarded on event rate limiting key calculation
+  [#517](https://github.com/fluxcd/notification-controller/pull/517)
+- Fix Alert .spec.eventMetadata behavior
+  [#529](https://github.com/fluxcd/notification-controller/pull/529)
+
+## 1.0.0-rc.3
+
+**Release date:** 2023-05-12
+
+This release candidate comes with support for
+adding [custom metadata](https://github.com/fluxcd/notification-controller/blob/v1.0.0-rc.3/docs/spec/v1beta2/alerts.md#event-metadata)
+to Flux events. A new field was added to the Alert v1beta2 API named
+`.spec.eventMetadata` that allows users to enrich the alerts with
+information about the cluster name, region, environment, etc.
+
+In addition, the controller dependencies have been updated to patch
+CVE-2023-1732 and the base image has been updated to Alpine 3.18.
+
+Improvements:
+- Add event metadata field to Alert spec
+  [#519](https://github.com/fluxcd/notification-controller/pull/506)
+- Update Alpine to 3.18
+  [#524](https://github.com/fluxcd/notification-controller/pull/524)
+- build(deps): bump github.com/cloudflare/circl from 1.3.2 to 1.3.3
+  [#525](https://github.com/fluxcd/notification-controller/pull/525)
+
+## 1.0.0-rc.2
+
+**Release date:** 2023-05-09
+
+This release candidate comes with performance improvements for Receivers
+and removes the deprecated `.status.url` field from the Receiver v1 API.
+
+A new field was added to the Alert v1beta2 API named `.spec.inclusionList` for
+better control over events filtering.
+
+In addition, the controller dependencies have been updated to their latest
+versions.
+
+Improvements:
+- Index receivers using webhook path as key
+  [#506](https://github.com/fluxcd/notification-controller/pull/506)
+- Append the Alert summary to Azure DevOps genre field
+  [#514](https://github.com/fluxcd/notification-controller/pull/514)
+- Add InclusionList to Alert CRD
+  [#515](https://github.com/fluxcd/notification-controller/pull/515)
+- Update dependencies
+  [#520](https://github.com/fluxcd/notification-controller/pull/520)
+- Improve event handler tests
+  [#521](https://github.com/fluxcd/notification-controller/pull/521)
+- receiver/v1: Remove deprecated `.status.url` field
+  [#482](https://github.com/fluxcd/notification-controller/pull/482)
+
+## 1.0.0-rc.1
+
+**Release date:** 2023-03-30
+
+This release candidate promotes the Receiver API from v1beta2 to v1. The Receiver v1 API now supports triggering the reconciliation of multiple 
+resources using match labels.
+
+### Highlights
+
+#### API changes
+
+The `Receiver` kind was promoted from v1beta2 to v1 (GA). All other kinds of the notification.toolkit.fluxcd.io group stay at version v1beta2.
+
+The receivers.notification.toolkit.fluxcd.io CRD contains the following versions:
+
+- v1 (storage version)
+- v1beta2 (deprecated)
+- v1beta1 (deprecated)
+
+#### Upgrade Procedure
+
+The `Receiver` v1 API is backwards compatible with v1beta2.
+
+To upgrade from v1beta2, after deploying the new CRD and controller, set `apiVersion: notification.toolkit.fluxcd.io/v1` in the YAML files that 
+contain `Receiver` definitions. Bumping the API version in manifests can be done gradually. It is advised to not delay this procedure as the beta 
+versions will be removed after 6 months.
+
+### Full Changelog
+
+Improvements:
+- GA: Promote Receiver API to notification.toolkit.fluxcd.io/v1
+  [#498](https://github.com/fluxcd/notification-controller/pull/498)
+- support multiple resources in Receivers by using match labels
+  [#482](https://github.com/fluxcd/notification-controller/pull/482)
+- docs: fixes to the Receiver documentation
+  [#495](https://github.com/fluxcd/notification-controller/pull/495)
+
+## 0.33.0
+
+**Release date:** 2023-03-08
+
+This release updates to Go version the controller is build with to `1.20`,
+and updates the dependencies to their latest versions.
+
+In addition, `klog` is now configured to log using the same logger as the rest
+of the controller (providing a consistent log format).
+
+Improvements:
+* Update Go to 1.20
+  [#483](https://github.com/fluxcd/notification-controller/pull/483)
+* Update dependencies
+  [#485](https://github.com/fluxcd/notification-controller/pull/485)
+* Use `logger.SetLogger` to also configure `klog`
+  [#486](https://github.com/fluxcd/notification-controller/pull/486)
+
+## 0.32.1
+
+**Release date:** 2023-02-28
+
+This prerelease comes with a fix to the version of the ImageRepository API
+when it is not specified in the Receiver spec, now defaulting to
+`image.toolkit.fluxcd.io/v1beta2`.
+
+In addition, the controller dependencies have been updated to their latest
+versions.
+
+Fixes:
+* receiver: update default ImageRepository version
+  [#479](https://github.com/fluxcd/notification-controller/pull/479)
+
+Improvements:
+* Update dependencies
+  [#478](https://github.com/fluxcd/notification-controller/pull/478)
+  [#480](https://github.com/fluxcd/notification-controller/pull/480)
+
+## 0.32.0
+
+**Release date:** 2023-02-16
+
+This prerelease adds support for parsing
+[RFC-0005](https://github.com/fluxcd/flux2/tree/main/rfcs/0005-artifact-revision-and-digest)
+revision format. Similar to artifact `Checksum`, the new `Digest` metadata is
+also removed from Alerts.
+
+In addition, the controller dependencies have been updated to their latest
+versions.
+
+Improvements:
+* Support RFC-0005 revision format
+  [#472](https://github.com/fluxcd/notification-controller/pull/472)
+* Update dependencies
+  [#474](https://github.com/fluxcd/notification-controller/pull/474)
+
 ## 0.31.0
 
 **Release date:** 2023-02-01

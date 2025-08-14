@@ -19,37 +19,56 @@ package notifier
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v6"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v6/git"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	eventv1 "github.com/fluxcd/pkg/apis/event/v1beta1"
 	"github.com/fluxcd/pkg/apis/meta"
+	"github.com/fluxcd/pkg/auth/azure"
+	"github.com/fluxcd/pkg/cache"
 )
 
 const genre string = "fluxcd"
 
-// AzureDevOps is a Azure DevOps notifier.
+type azureDevOpsClient interface {
+	CreateCommitStatus(context.Context, git.CreateCommitStatusArgs) (*git.GitStatus, error)
+	GetStatuses(context.Context, git.GetStatusesArgs) (*[]git.GitStatus, error)
+}
+
+// AzureDevOps is an Azure DevOps notifier.
 type AzureDevOps struct {
-	Project     string
-	Repo        string
-	ProviderUID string
-	Client      git.Client
+	Project      string
+	Repo         string
+	CommitStatus string
+	Client       azureDevOpsClient
 }
 
 // NewAzureDevOps creates and returns a new AzureDevOps notifier.
-func NewAzureDevOps(providerUID string, addr string, token string, certPool *x509.CertPool) (*AzureDevOps, error) {
+func NewAzureDevOps(ctx context.Context, commitStatus string, addr string, token string,
+	tlsConfig *tls.Config, proxy, serviceAccountName, providerName, providerNamespace string,
+	tokenClient client.Client, tokenCache *cache.TokenCache) (*AzureDevOps, error) {
+	var err error
 	if len(token) == 0 {
-		return nil, errors.New("azure devops token cannot be empty")
+		// if token doesn't exist, try to create a new token using managed identity
+		token, err = newManagedIdentityToken(ctx, proxy, serviceAccountName, providerName, providerNamespace, azure.ScopeDevOps, tokenClient, tokenCache)
+		if err != nil {
+			return nil, fmt.Errorf("failed to acquire azure devops token: %w", err)
+		}
 	}
 
 	host, id, err := parseGitAddress(addr)
 	if err != nil {
 		return nil, err
+	}
+
+	// this should never happen
+	if commitStatus == "" {
+		return nil, errors.New("commit status cannot be empty")
 	}
 
 	comp := strings.Split(id, "/")
@@ -62,20 +81,18 @@ func NewAzureDevOps(providerUID string, addr string, token string, certPool *x50
 
 	orgURL := fmt.Sprintf("%v/%v", host, org)
 	connection := azuredevops.NewPatConnection(orgURL, token)
-	if certPool != nil {
-		connection.TlsConfig = &tls.Config{
-			RootCAs: certPool,
-		}
+	if tlsConfig != nil {
+		connection.TlsConfig = tlsConfig
 	}
 	client := connection.GetClientByUrl(orgURL)
 	gitClient := &git.ClientImpl{
 		Client: *client,
 	}
 	return &AzureDevOps{
-		Project:     proj,
-		Repo:        repo,
-		ProviderUID: providerUID,
-		Client:      gitClient,
+		Project:      proj,
+		Repo:         repo,
+		CommitStatus: commitStatus,
+		Client:       gitClient,
 	}, nil
 }
 
@@ -86,7 +103,7 @@ func (a AzureDevOps) Post(ctx context.Context, event eventv1.Event) error {
 		return nil
 	}
 
-	revString, ok := event.Metadata[eventv1.MetaRevisionKey]
+	revString, ok := event.GetRevision()
 	if !ok {
 		return errors.New("missing revision metadata")
 	}
@@ -100,9 +117,10 @@ func (a AzureDevOps) Post(ctx context.Context, event eventv1.Event) error {
 	}
 
 	// Check if the exact status is already set
-	g := genre
+	g := commitStatusGenre(event)
+
 	_, desc := formatNameAndDescription(event)
-	id := generateCommitStatusID(a.ProviderUID, event)
+	id := a.CommitStatus
 	createArgs := git.CreateCommitStatusArgs{
 		Project:      &a.Project,
 		RepositoryId: &a.Repo,
@@ -123,8 +141,9 @@ func (a AzureDevOps) Post(ctx context.Context, event eventv1.Event) error {
 	}
 	statuses, err := a.Client.GetStatuses(ctx, getArgs)
 	if err != nil {
-		return fmt.Errorf("could not list commit statuses: %v", err)
+		return fmt.Errorf("could not list commit statuses: %w", err)
 	}
+
 	if duplicateAzureDevOpsStatus(statuses, createArgs.GitCommitStatusToCreate) {
 		return nil
 	}
@@ -132,7 +151,7 @@ func (a AzureDevOps) Post(ctx context.Context, event eventv1.Event) error {
 	// Create a new status
 	_, err = a.Client.CreateCommitStatus(ctx, createArgs)
 	if err != nil {
-		return fmt.Errorf("could not create commit status: %v", err)
+		return fmt.Errorf("could not create commit status: %w", err)
 	}
 	return nil
 }
@@ -171,4 +190,13 @@ func duplicateAzureDevOpsStatus(statuses *[]git.GitStatus, status *git.GitStatus
 	}
 
 	return false
+}
+
+func commitStatusGenre(event eventv1.Event) string {
+	summary, ok := event.Metadata["summary"]
+	if ok {
+		return fmt.Sprintf("%s:%s", genre, summary)
+	}
+
+	return genre
 }

@@ -1,5 +1,7 @@
 # Providers
 
+<!-- menuweight:40 -->
+
 The `Provider` API defines how events are encoded and where to send them.
 
 ## Example
@@ -107,14 +109,17 @@ The supported alerting providers are:
 | [Generic webhook](#generic-webhook)                     | `generic`        |
 | [Generic webhook with HMAC](#generic-webhook-with-hmac) | `generic-hmac`   |
 | [Azure Event Hub](#azure-event-hub)                     | `azureeventhub`  |
+| [DataDog](#datadog)                                     | `datadog`        |
 | [Discord](#discord)                                     | `discord`        |
 | [GitHub dispatch](#github-dispatch)                     | `githubdispatch` |
 | [Google Chat](#google-chat)                             | `googlechat`     |
+| [Google Pub/Sub](#google-pubsub)                        | `googlepubsub`   |
 | [Grafana](#grafana)                                     | `grafana`        |
 | [Lark](#lark)                                           | `lark`           |
 | [Matrix](#matrix)                                       | `matrix`         |
 | [Microsoft Teams](#microsoft-teams)                     | `msteams`        |
 | [Opsgenie](#opsgenie)                                   | `opsgenie`       |
+| [PagerDuty](#pagerduty)                                 | `pagerduty`      |
 | [Prometheus Alertmanager](#prometheus-alertmanager)     | `alertmanager`   |
 | [Rocket](#rocket)                                       | `rocket`         |
 | [Sentry](#sentry)                                       | `sentry`         |
@@ -124,13 +129,14 @@ The supported alerting providers are:
 
 The supported providers for [Git commit status updates](#git-commit-status-updates) are:
 
-| Provider                      | Type          |
-|-------------------------------|---------------|
-| [Azure DevOps](#azure-devops) | `azuredevops` |
-| [Bitbucket](#bitbucket)       | `bitbucket`   |
-| [GitHub](#github)             | `github`      |
-| [GitLab](#gitlab)             | `gitlab`      |
-| [Gitea](#gitea)               | `gitea`       |
+| Provider                                        | Type              |
+| ------------------------------------------------| ----------------- |
+| [Azure DevOps](#azure-devops)                   | `azuredevops`     |
+| [Bitbucket](#bitbucket)                         | `bitbucket`       |
+| [BitbucketServer](#bitbucket-serverdata-center) | `bitbucketserver` |
+| [GitHub](#github)                               | `github`          |
+| [GitLab](#gitlab)                               | `gitlab`          |
+| [Gitea](#gitea)                                 | `gitea`           |
 
 #### Alerting
 
@@ -232,7 +238,7 @@ func verifySignature(signature string, payload, key []byte) error {
 	case "sha512":
 		newF = sha512.New
 	default:
-		return fmt.Errorf("unsupported signature algorithm %q", sigHdr[0])
+		return fmt.Errorf("unsupported signature algorithm %q", sig[0])
 	}
 
 	mac := hmac.New(newF, key)
@@ -241,22 +247,22 @@ func verifySignature(signature string, payload, key []byte) error {
 	}
 
 	sum := fmt.Sprintf("%x", mac.Sum(nil))
-	if sum != sig[0] {
-		return fmt.Errorf("HMACs do not match: %#v != %#v", sum, sigHdr[0])
+	if sum != sig[1] {
+		return fmt.Errorf("HMACs do not match: %#v != %#v", sum, sig[1])
 	}
 	return nil
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Require a X-Signature header
-	if len(r.Header["X-Signature"])) == 0 {
+	if len(r.Header["X-Signature"]) == 0 {
 		http.Error(w, "missing X-Signature header", http.StatusBadRequest)
 		return
 	}
 
 	// Read the request body with a limit of 1MB
 	lr := io.LimitReader(r.Body, 1<<20)
-	body, err := ioutil.ReadAll(lr)
+	body, err := io.ReadAll(lr)
 	if err != nil {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
@@ -264,9 +270,9 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Verify signature using the same token as the Secret referenced in
 	// Provider
-	key := "<token>"
+	key := []byte("<token>")
 	if err := verifySignature(r.Header.Get("X-Signature"), body, key); err != nil {
-		http.Error(w, fmt.Sprintf("failed to verify HMAC signature: %s", err.String()), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("failed to verify HMAC signature: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -401,6 +407,62 @@ stringData:
     address: "https://xxx.webhook.office.com/..."
 ```
 
+##### DataDog
+
+When `.spec.type` is set to `datadog`, the controller will send a payload for
+an [Event](events.md#event-structure) to the provided DataDog API [Address](#address).
+
+The Event will be formatted into a [DataDog Event](https://docs.datadoghq.com/api/latest/events/#post-an-event) and sent to the
+API endpoint of the provided DataDog [Address](#address).
+
+This Provider type supports the configuration of a [proxy URL](#https-proxy)
+and/or [TLS certificates](#tls-certificates).
+
+The metadata of the Event is included in the DataDog event as extra tags.
+
+###### DataDog example
+
+To configure a Provider for DataDog, create a Secret with [the `token`](#token-example)
+set to a [DataDog API key](https://docs.datadoghq.com/account_management/api-app-keys/#api-keys)
+(not an application key!) and a `datadog` Provider with a [Secret reference](#secret-reference).
+
+```yaml
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta2
+kind: Provider
+metadata:
+  name: datadog
+  namespace: default
+spec:
+  type: datadog
+  address: https://api.datadoghq.com # DataDog Site US1
+  secretRef:
+    name: datadog-secret
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: datadog-secret
+  namespace: default
+stringData:
+  token: <DataDog API Key>
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta2
+kind: Alert
+metadata:
+  name: datadog-info
+  namespace: default
+spec:
+  eventSeverity: info
+  eventSources:
+    - kind: HelmRelease
+      name: "*"
+  providerRef:
+    name: datadog
+  eventMetadata:
+    env: my-k8s-cluster # example of adding a custom `env` tag to the event
+```
+
 ##### Discord
 
 When `.spec.type` is set to `discord`, the controller will send a payload for
@@ -501,8 +563,9 @@ The Event will be formatted into a message string, with the metadata attached
 as a list of key-value pairs.
 
 The Provider's [Channel](#channel) is used to set the receiver of the message.
-This can be a unique identifier (`-1234567890`) for the target chat, or
-the username (`@username`) of the target channel.
+This can be a unique identifier (`-1234567890`) for the target chat,
+a unique identifier with the topic identifier (`-1234567890:1`) for the forum chat,
+or the username (`@username`) of the target channel.
 
 This Provider type does not support the configuration of a [proxy URL](#https-proxy)
 or [TLS certificates](#tls-certificates).
@@ -524,7 +587,7 @@ metadata:
 spec:
   type: telegram
   address: https://api.telegram.org
-  channel: "@fluxcd" # or "-1557265138" (channel id)
+  channel: "@fluxcd" # or "-1557265138" (channel id) or "-1552289257:1" (forum chat id with topic id)
   secretRef:
     name: telegram-token
 ```
@@ -669,6 +732,65 @@ stringData:
   address: https://chat.googleapis.com/v1/spaces/...
 ```
 
+##### Google Pub/Sub
+
+When `.spec.type` is set to `googlepubsub`, the controller will publish the payload of
+an [Event](events.md#event-structure) on the Google Pub/Sub Topic ID provided in the
+[Channel](#channel) field, which must exist in the GCP Project ID provided in the
+[Address](#address) field.
+
+This Provider type can optionally use the [Secret reference](#secret-reference) to
+authenticate on the Google Pub/Sub API by using [JSON credentials](https://cloud.google.com/iam/docs/service-account-creds#key-types).
+The credentials must be specified on [the `token`](#token-example) field of the Secret.
+
+If no JSON credentials are specified, then the automatic authentication methods of
+the Google libraries will take place, and therefore methods like Workload Identity
+will be automatically attempted.
+
+The Google identity effectively used for publishing messages must have
+[the required permissions](https://cloud.google.com/iam/docs/understanding-roles#pubsub.publisher)
+on the Pub/Sub Topic.
+
+You can optionally add [attributes](https://cloud.google.com/pubsub/docs/samples/pubsub-publish-custom-attributes#pubsub_publish_custom_attributes-go)
+to the Pub/Sub message using a [`headers` key in the referenced Secret](#http-headers-example).
+
+This Provider type does not support the configuration of a [proxy URL](#https-proxy)
+or [TLS certificates](#tls-certificates).
+
+###### Google Pub/Sub with JSON Credentials and Custom Headers Example
+
+To configure a Provider for Google Pub/Sub authenticating with JSON credentials and
+custom headers, create a Secret with [the `token`](#token-example) set to the
+necessary JSON credentials, [the `headers`](#http-headers-example) field set to a
+YAML string-to-string dictionary, and a `googlepubsub` Provider with the associated
+[Secret reference](#secret-reference).
+
+```yaml
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta2
+kind: Provider
+metadata:
+  name: googlepubsub-provider
+  namespace: desired-namespace
+spec:
+  type: googlepubsub
+  address: <GCP Project ID>
+  channel: <Pub/Sub Topic ID>
+  secretRef:
+    name: googlepubsub-provider-creds
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: googlepubsub-provider-creds
+  namespace: desired-namespace
+stringData:
+  token: <GCP JSON credentials>
+  headers: |
+    attr1-name: attr1-value
+    attr2-name: attr2-value
+```
+
 ##### Opsgenie
 
 When `.spec.type` is set to `opsgenie`, the controller will send a payload for
@@ -708,6 +830,64 @@ metadata:
   namespace: default
 stringData:
     token: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+##### PagerDuty
+
+When `.spec.type` is set to `pagerduty`, the controller will send a payload for
+an [Event](events.md#event-structure) to the provided PagerDuty [Address](#address).
+
+The Event will be formatted into an [Event API v2](https://developer.pagerduty.com/api-reference/368ae3d938c9e-send-an-event-to-pager-duty) payload,
+triggering or resolving an incident depending on the event's `Severity`.
+
+The provider will also send [Change Events](https://developer.pagerduty.com/api-reference/95db350959c37-send-change-events-to-the-pager-duty-events-api)
+for `info` level `Severity`, which will be displayed in the PagerDuty service's timeline to track changes.
+
+This Provider type supports the configuration of a [proxy URL](#https-proxy)
+and [TLS certificates](#tls-certificates).
+
+The [Channel](#channel) is used to set the routing key to send the event to the appropriate integration.
+
+###### PagerDuty example
+
+To configure a Provider for Pagerduty, create a `pagerduty` Provider,
+set `address` to the integration URL and `channel` set to
+the integration key (also known as a routing key) for your [service](https://support.pagerduty.com/docs/services-and-integrations#create-a-generic-events-api-integration)
+or [event orchestration](https://support.pagerduty.com/docs/event-orchestration).
+
+When adding an integration for a service on PagerDuty, it is recommended to use `Events API v2` integration.
+
+**Note**: PagerDuty does not support Change Events when sent to global integrations, such as event orchestration.
+
+```yaml
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta2
+kind: Provider
+metadata:
+  name: pagerduty
+  namespace: default
+spec:
+  type: pagerduty
+  address: https://events.pagerduty.com
+  channel: <integrationKey>
+```
+If you are sending to a service integration, it is recommended to set your Alert to filter to
+only those sources you want to trigger an incident for that service. For example:
+
+```yaml
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta2
+kind: Alert
+metadata:
+  name: my-service-pagerduty
+  namespace: default
+spec:
+  providerRef:
+    name: pagerduty
+  eventSources:
+    - kind: HelmRelease
+      name: my-service
+      namespace: default
 ```
 
 ##### Prometheus Alertmanager
@@ -815,7 +995,10 @@ stringData:
 
 ### Address
 
-`.spec.address` is an optional field that specifies the URL where the events are posted.
+`.spec.address` is an optional field that specifies the endpoint where the events are posted.
+The meaning of endpoint here depends on the specific Provider type being used.
+For the `generic` Provider for example this is an HTTP/S address.
+For other Provider types this could be a project ID or a namespace.
 
 If the address contains sensitive information such as tokens or passwords, it is 
 recommended to store the address in the Kubernetes secret referenced by `.spec.secretRef.name`.
@@ -890,8 +1073,8 @@ metadata:
   namespace: default
 stringData:
   headers: |
-     Authorization: my-api-token
-     X-Forwarded-Proto: https
+    Authorization: my-api-token
+    X-Forwarded-Proto: https
 ```
 
 #### Proxy auth example
@@ -914,11 +1097,12 @@ stringData:
 
 `.spec.certSecretRef` is an optional field to specify a name reference to a
 Secret in the same namespace as the Provider, containing the TLS CA certificate.
+The secret must be of type `kubernetes.io/tls` or `Opaque`.
 
 #### Example
 
 To enable notification-controller to communicate with a provider API over HTTPS
-using a self-signed TLS certificate, set the `caFile` like so:
+using a self-signed TLS certificate, set the `ca.crt` like so:
 
 ```yaml
 ---
@@ -938,10 +1122,15 @@ kind: Secret
 metadata:
   name: my-ca-crt
   namespace: default
+type: kubernetes.io/tls # or Opaque
 stringData:
-  caFile: |
+  ca.crt: |
     <--- CA Key --->
 ```
+
+**Warning:** Support for the `caFile` key has been
+deprecated. If you have any Secrets using this key,
+the controller will log a deprecation warning.
 
 ### HTTP/S proxy
 
@@ -1297,7 +1486,13 @@ kubectl create secret generic gitlab-token --from-literal=token=<GITLAB-TOKEN>
 When `.spec.type` is set to `gitea`, the referenced secret must contain a key called `token` with the value set to a
 [Gitea token](https://docs.gitea.io/en-us/api-usage/#generating-and-listing-api-tokens).
 
-The token owner must have permissions to update the commit status for the Gitea repository specified in `.spec.address`.
+The token must have at least the `write:repository` permission for the provider to 
+update the commit status for the Gitea repository specified in `.spec.address`.
+
+{{% alert color="info" title="Gitea 1.20.0 & 1.20.1" %}}
+Due to a bug in Gitea 1.20.0 and 1.20.1, these versions require the additional 
+`read:misc` scope to be applied to the token.
+{{% /alert %}}
 
 You can create the secret with `kubectl` like this:
 
@@ -1320,6 +1515,32 @@ You can create the secret with `kubectl` like this:
 ```shell
 kubectl create secret generic bitbucket-token --from-literal=token=<username>:<app-password>
 ```
+
+#### BitBucket Server/Data Center
+
+When `.spec.type` is set to `bitbucketserver`, the following auth methods are available:
+
+- Basic Authentication (username/password)
+- [HTTP access tokens](https://confluence.atlassian.com/bitbucketserver/http-access-tokens-939515499.html)
+
+For Basic Authentication, the referenced secret must contain a `password` field. The `username` field can either come from the [`.spec.username` field of the Provider](https://fluxcd.io/flux/components/notification/providers/#username) or can be defined in the referenced secret.
+
+You can create the secret with `kubectl` like this:
+
+```shell
+kubectl create secret generic bb-server-username-password --from-literal=username=<username> --from-literal=password=<password>
+```
+
+For HTTP access tokens, the secret can be created with `kubectl` like this:
+
+```shell
+kubectl create secret generic bb-server-token --from-literal=token=<token>
+```
+
+The HTTP access token must have `Repositories (Read/Write)` permission for
+the repository specified in `.spec.address`.
+
+**NOTE:** Please provide HTTPS clone URL in the `address` field of this provider. SSH URLs are not supported by this provider type.
 
 #### Azure DevOps
 

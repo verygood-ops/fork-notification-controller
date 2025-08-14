@@ -97,12 +97,8 @@ func (in *Receiver) SetConditions(conditions []metav1.Condition) {
 }
 
 // +genclient
-// +genclient:Namespaced
 // +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description=""
-// +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type==\"Ready\")].status",description=""
-// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type==\"Ready\")].message",description=""
+// +kubebuilder:skipversion
 
 // Receiver is the Schema for the receivers API
 type Receiver struct {

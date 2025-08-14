@@ -24,14 +24,16 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/fluxcd/pkg/git"
+
+	giturls "github.com/chainguard-dev/git-urls"
 	eventv1 "github.com/fluxcd/pkg/apis/event/v1beta1"
-	giturls "github.com/whilp/git-urls"
 )
 
 func parseGitAddress(s string) (string, string, error) {
 	u, err := giturls.Parse(s)
 	if err != nil {
-		return "", "", nil
+		return "", "", fmt.Errorf("failed parsing URL %q: %w", s, err)
 	}
 
 	scheme := u.Scheme
@@ -51,14 +53,6 @@ func formatNameAndDescription(event eventv1.Event) (string, string) {
 	desc := strings.Join(splitCamelcase(event.Reason), " ")
 	desc = strings.ToLower(desc)
 	return name, desc
-}
-
-// generateCommitStatusID returns a unique ID per cluster based on the Provider UID,
-// involved object kind and name.
-func generateCommitStatusID(providerUID string, event eventv1.Event) string {
-	uidParts := strings.Split(providerUID, "-")
-	id := fmt.Sprintf("%s/%s/%s", event.InvolvedObject.Kind, event.InvolvedObject.Name, uidParts[0])
-	return strings.ToLower(id)
 }
 
 func splitCamelcase(src string) (entries []string) {
@@ -107,15 +101,11 @@ func splitCamelcase(src string) (entries []string) {
 }
 
 func parseRevision(rev string) (string, error) {
-	comp := strings.Split(rev, "/")
-	if len(comp) < 2 {
-		return "", fmt.Errorf("revision string format incorrect: %v", rev)
+	hash := git.ExtractHashFromRevision(git.TransformRevision(rev))
+	if hash.Algorithm() == git.HashTypeUnknown {
+		return "", fmt.Errorf("failed to extract commit hash from '%s' revision", rev)
 	}
-	sha := comp[len(comp)-1]
-	if sha == "" {
-		return "", fmt.Errorf("commit SHA cannot be empty: %v", rev)
-	}
-	return sha, nil
+	return hash.String(), nil
 }
 
 func sha1String(str string) string {
@@ -126,4 +116,12 @@ func sha1String(str string) string {
 func basicAuth(username, password string) string {
 	auth := username + ":" + password
 	return base64.StdEncoding.EncodeToString([]byte(auth))
+}
+
+func strPtr(s string) *string {
+	return &s
+}
+
+func int64Ptr(i int64) *int64 {
+	return &i
 }
