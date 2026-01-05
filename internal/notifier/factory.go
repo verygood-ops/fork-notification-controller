@@ -324,7 +324,7 @@ func dataDogNotifierFunc(opts notifierOptions) (Interface, error) {
 }
 
 func natsNotifierFunc(opts notifierOptions) (Interface, error) {
-	return NewNATS(opts.URL, opts.Channel, opts.Username, opts.Password)
+	return NewNATS(opts.URL, opts.Channel, opts.Username, opts.Password, opts.SecretData)
 }
 
 func gitHubNotifierFunc(opts notifierOptions) (Interface, error) {
