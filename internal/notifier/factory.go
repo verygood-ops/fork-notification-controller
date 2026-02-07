@@ -59,6 +59,7 @@ var (
 		apiv1.GitLabProvider:                    gitLabNotifierFunc,
 		apiv1.GitLabMergeRequestCommentProvider: gitLabMergeRequestCommentNotifierFunc,
 		apiv1.GiteaProvider:                     giteaNotifierFunc,
+		apiv1.GiteaPullRequestCommentProvider:   giteaPullRequestCommentNotifierFunc,
 		apiv1.BitbucketServerProvider:           bitbucketServerNotifierFunc,
 		apiv1.BitbucketProvider:                 bitbucketNotifierFunc,
 		apiv1.AzureDevOpsProvider:               azureDevOpsNotifierFunc,
@@ -353,10 +354,11 @@ func gitLabMergeRequestCommentNotifierFunc(opts notifierOptions) (Interface, err
 }
 
 func giteaNotifierFunc(opts notifierOptions) (Interface, error) {
-	if opts.Token == "" && opts.Password != "" {
-		opts.Token = opts.Password
-	}
-	return NewGitea(opts.CommitStatus, opts.URL, opts.ProxyURL, opts.Token, opts.TLSConfig)
+	return NewGitea(opts.CommitStatus, opts.GiteaClientOptions()...)
+}
+
+func giteaPullRequestCommentNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewGiteaPullRequestComment(opts.ProviderUID, opts.GiteaClientOptions()...)
 }
 
 func bitbucketServerNotifierFunc(opts notifierOptions) (Interface, error) {

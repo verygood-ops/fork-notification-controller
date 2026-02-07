@@ -367,6 +367,7 @@ spec:
                 - github
                 - gitlab
                 - gitea
+                - giteapullrequestcomment
                 - bitbucketserver
                 - bitbucket
                 - azuredevops

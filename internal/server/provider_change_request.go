@@ -26,7 +26,8 @@ import (
 // change request provider.
 func isChangeRequestProvider(providerType string) bool {
 	return providerType == apiv1beta3.GitHubPullRequestCommentProvider ||
-		providerType == apiv1beta3.GitLabMergeRequestCommentProvider
+		providerType == apiv1beta3.GitLabMergeRequestCommentProvider ||
+		providerType == apiv1beta3.GiteaPullRequestCommentProvider
 }
 
 // hasChangeRequestKey returns true if the event has the change request key in its metadata.
