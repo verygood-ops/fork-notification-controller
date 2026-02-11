@@ -131,6 +131,7 @@ The providers supporting change request (pull request / merge request) comments 
 | Provider                                                                   | Type                           |
 |----------------------------------------------------------------------------|--------------------------------|
 | [GitHub Pull Request Comment](#github-pull-request-comment)                | `githubpullrequestcomment`     |
+| [Gitea Pull Request Comment](#gitea-pull-request-comment)                  | `giteapullrequestcomment`      |
 | [GitLab Merge Request Comment](#gitlab-merge-request-comment)              | `gitlabmergerequestcomment`    |
 
 #### Alerting
@@ -2146,6 +2147,54 @@ Reconciliation failed: validation error
 Metadata:
 * `revision`: branch@sha1:hex
 ```
+
+#### Gitea Pull Request Comment
+
+When `.spec.type` is set to `giteapullrequestcomment`, the controller will post
+a comment on the Gitea pull request specified in the event metadata.
+
+This provider is designed to work with Flux objects that contain the
+`event.toolkit.fluxcd.io/change_request` annotation, which specifies
+the pull request number. Flux objects without this annotation are
+ignored.
+
+Each Flux object will have at most one status comment per provider on the pull request,
+which is updated whenever a new event is received.
+
+##### Authentication
+
+The provider requires a [Gitea token](https://docs.gitea.io/en-us/api-usage/#generating-and-listing-api-tokens)
+with at least the `write:issue` permission to read and write pull request comments.
+
+##### Gitea Pull Request Comment Example
+
+```yaml
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: gitea-pr-comment
+  namespace: flux-system
+spec:
+  type: giteapullrequestcomment
+  address: https://gitea.example.com/my-org/my-repo
+  secretRef:
+    name: gitea-token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitea-token
+  namespace: flux-system
+stringData:
+  token: <personal-access-token>
+```
+
+For self-hosted Gitea instances, update the `address` field to point to your Gitea instance.
+
+##### Comment Format
+
+The provider posts comments in the same format as the [GitHub Pull Request Comment](#comment-format) provider.
 
 #### GitLab Merge Request Comment
 
