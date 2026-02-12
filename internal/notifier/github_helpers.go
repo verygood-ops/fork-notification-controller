@@ -28,8 +28,8 @@ import (
 	gogithub "github.com/google/go-github/v64/github"
 	"golang.org/x/oauth2"
 
+	"github.com/fluxcd/pkg/auth/githubapp"
 	"github.com/fluxcd/pkg/cache"
-	"github.com/fluxcd/pkg/git/github"
 
 	"github.com/fluxcd/notification-controller/api/v1beta3"
 )
@@ -128,7 +128,7 @@ func NewGitHubClient(ctx context.Context, opts ...GitHubClientOption) (*GitHubCl
 	var appSlug string
 	token := o.token
 	if token == "" {
-		if _, ok := o.secretData[github.KeyAppID]; !ok {
+		if _, ok := o.secretData[githubapp.KeyAppID]; !ok {
 			return nil, errors.New("github token or github app details must be specified")
 		}
 
@@ -176,9 +176,9 @@ func NewGitHubClient(ctx context.Context, opts ...GitHubClientOption) (*GitHubCl
 }
 
 // getGitHubAppToken retrieves an installation token using GitHub App authentication.
-func getGitHubAppToken(ctx context.Context, o *gitHubClientOptions) (*github.AppToken, error) {
-	githubOpts := []github.OptFunc{
-		github.WithAppData(o.secretData),
+func getGitHubAppToken(ctx context.Context, o *gitHubClientOptions) (*githubapp.AppToken, error) {
+	githubOpts := []githubapp.OptFunc{
+		githubapp.WithAppData(o.secretData),
 	}
 
 	if o.proxyURL != "" {
@@ -186,23 +186,23 @@ func getGitHubAppToken(ctx context.Context, o *gitHubClientOptions) (*github.App
 		if err != nil {
 			return nil, fmt.Errorf("error parsing proxy URL '%s': %w", o.proxyURL, err)
 		}
-		githubOpts = append(githubOpts, github.WithProxyURL(proxyURL))
+		githubOpts = append(githubOpts, githubapp.WithProxyURL(proxyURL))
 	}
 
 	if o.tokenCache != nil {
-		githubOpts = append(githubOpts, github.WithCache(o.tokenCache,
+		githubOpts = append(githubOpts, githubapp.WithCache(o.tokenCache,
 			v1beta3.ProviderKind, o.providerName, o.providerNamespace, OperationPost))
 	}
 
 	if o.fetchUserLogin {
-		githubOpts = append(githubOpts, github.WithAppSlugReflection())
+		githubOpts = append(githubOpts, githubapp.WithAppSlugReflection())
 	}
 
 	if o.tlsConfig != nil {
-		githubOpts = append(githubOpts, github.WithTLSConfig(o.tlsConfig))
+		githubOpts = append(githubOpts, githubapp.WithTLSConfig(o.tlsConfig))
 	}
 
-	client, err := github.New(githubOpts...)
+	client, err := githubapp.New(githubOpts...)
 	if err != nil {
 		return nil, err
 	}

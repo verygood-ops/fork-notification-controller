@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	authgithub "github.com/fluxcd/pkg/git/github"
+	"github.com/fluxcd/pkg/auth/githubapp"
 	"github.com/fluxcd/pkg/ssh"
 
 	"github.com/google/go-github/v64/github"
@@ -143,7 +143,7 @@ func TestNewGithubProvider(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				var response []byte
 				var err error
-				response, err = json.Marshal(&authgithub.AppToken{Token: "access-token", ExpiresAt: expiresAt})
+				response, err = json.Marshal(&githubapp.AppToken{Token: "access-token", ExpiresAt: expiresAt})
 				gm.Expect(err).ToNot(HaveOccurred())
 				w.Write(response)
 			}
