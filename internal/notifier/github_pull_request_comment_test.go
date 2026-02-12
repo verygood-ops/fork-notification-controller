@@ -28,7 +28,7 @@ import (
 	"github.com/google/go-github/v64/github"
 	. "github.com/onsi/gomega"
 
-	authgithub "github.com/fluxcd/pkg/git/github"
+	"github.com/fluxcd/pkg/auth/githubapp"
 	"github.com/fluxcd/pkg/ssh"
 )
 
@@ -142,7 +142,7 @@ func TestNewGitHubPullRequestCommentProvider(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				var response []byte
 				var err error
-				response, err = json.Marshal(&authgithub.AppToken{
+				response, err = json.Marshal(&githubapp.AppToken{
 					Token:     "access-token",
 					Slug:      "app-slug",
 					ExpiresAt: expiresAt,
