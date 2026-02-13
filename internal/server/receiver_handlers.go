@@ -56,12 +56,13 @@ const (
 
 // defaultFluxAPIVersions is a map of Flux API kinds to their API versions.
 var defaultFluxAPIVersions = map[string]string{
-	"Bucket":          "source.toolkit.fluxcd.io/v1",
-	"HelmChart":       "source.toolkit.fluxcd.io/v1",
-	"HelmRepository":  "source.toolkit.fluxcd.io/v1",
-	"GitRepository":   "source.toolkit.fluxcd.io/v1",
-	"OCIRepository":   "source.toolkit.fluxcd.io/v1",
-	"ImageRepository": "image.toolkit.fluxcd.io/v1",
+	"Bucket":            "source.toolkit.fluxcd.io/v1",
+	"HelmChart":         "source.toolkit.fluxcd.io/v1",
+	"HelmRepository":    "source.toolkit.fluxcd.io/v1",
+	"GitRepository":     "source.toolkit.fluxcd.io/v1",
+	"OCIRepository":     "source.toolkit.fluxcd.io/v1",
+	"ImageRepository":   "image.toolkit.fluxcd.io/v1",
+	"ArtifactGenerator": "source.extensions.fluxcd.io/v1beta1",
 }
 
 // IndexReceiverWebhookPath is a client.IndexerFunc that returns the Receiver's
