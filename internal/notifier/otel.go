@@ -248,6 +248,6 @@ func generateID(UID string, revision string) []byte {
 
 // Discriminates if an object kind is a source
 func isSource(kind string) bool {
-	sourceKinds := []string{"GitRepository", "HelmChart", "OCIRepository", "Bucket"}
+	sourceKinds := []string{"GitRepository", "HelmChart", "OCIRepository", "Bucket", "ExternalArtifact"}
 	return slices.Contains(sourceKinds, kind)
 }
