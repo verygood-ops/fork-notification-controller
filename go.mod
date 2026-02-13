@@ -1,6 +1,6 @@
 module github.com/fluxcd/notification-controller
 
-go 1.25.0
+go 1.26.0
 
 replace github.com/fluxcd/notification-controller/api => ./api
 
@@ -24,9 +24,9 @@ require (
 	github.com/fluxcd/pkg/git v0.43.0
 	github.com/fluxcd/pkg/masktoken v0.8.0
 	github.com/fluxcd/pkg/runtime v0.100.0
-	github.com/fluxcd/pkg/ssa v0.67.0
+	github.com/fluxcd/pkg/ssa v0.68.0
 	github.com/fluxcd/pkg/ssh v0.24.0
-	github.com/getsentry/sentry-go v0.41.0
+	github.com/getsentry/sentry-go v0.42.0
 	github.com/go-logr/logr v1.4.3
 	github.com/google/cel-go v0.27.0
 	github.com/google/go-github/v64 v64.0.0
@@ -40,7 +40,7 @@ require (
 	github.com/sethvargo/go-limiter v1.1.0
 	github.com/slok/go-http-metrics v0.13.0
 	github.com/spf13/pflag v1.0.10
-	gitlab.com/gitlab-org/api/client-go v1.16.0
+	gitlab.com/gitlab-org/api/client-go v1.33.0
 	go.opentelemetry.io/otel v1.39.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.39.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.39.0
