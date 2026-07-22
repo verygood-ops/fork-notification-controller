@@ -65,6 +65,7 @@ var (
 		apiv1.AzureDevOpsProvider:               azureDevOpsNotifierFunc,
 		apiv1.ZulipProvider:                     zulipNotifierFunc,
 		apiv1.OTELProvider:                      otelNotifierFunc,
+		apiv1.ZoomProvider:                      zoomNotifierFunc,
 	}
 )
 
@@ -384,4 +385,8 @@ func otelNotifierFunc(opts notifierOptions) (Interface, error) {
 		opts.Token = opts.Password
 	}
 	return NewOTLPTracer(opts.Context, opts.URL, opts.ProxyURL, opts.Headers, opts.TLSConfig, opts.Username, opts.Token)
+}
+
+func zoomNotifierFunc(opts notifierOptions) (Interface, error) {
+	return NewZoom(opts.URL, opts.ProxyURL, opts.TLSConfig, opts.Token)
 }
